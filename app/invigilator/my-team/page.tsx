@@ -125,9 +125,9 @@ export default function MyTeamPage() {
       return;
     }
 
-    const allInvigilatorIds = [
-      ...new Set((teamAssignments ?? []).map(a => a.invigilator_id)),
-    ];
+    const allInvigilatorIds = Array.from(
+  new Set((teamAssignments ?? []).map(a => a.invigilator_id))
+);
 
     if (allInvigilatorIds.length === 0) {
       setTeamShifts([]);
