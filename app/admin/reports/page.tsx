@@ -3,7 +3,7 @@
 import { useContext, useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { supabase } from '../../../lib/supabase';
-import { SeasonContext } from '../layout';
+import { SeasonContext } from '../SeasonContext';
 
 type SessionKey = 'morning' | 'mid' | 'afternoon';
 

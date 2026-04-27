@@ -1,21 +1,10 @@
 'use client';
 
+import { SeasonContext, type Season } from './SeasonContext';
 import Link from 'next/link';
-import { createContext, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { supabase } from '../../lib/supabase';
-
-export type Season = {
-  id: string;
-  name: string;
-  status: 'active' | 'archived';
-};
-
-export const SeasonContext = createContext<{
-  currentSeason: Season | null;
-}>({
-  currentSeason: null,
-});
 
 export default function AdminLayout({
   children,
