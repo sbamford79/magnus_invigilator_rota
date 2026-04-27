@@ -1,0 +1,1 @@
+export type SeasonStatus = 'active' | 'upcoming' | 'archived';
