@@ -15,9 +15,14 @@ type ShiftSlot = {
 
 type Assignment = {
   shift_slot_id: string;
-  invigilators: {
-    full_name: string;
-  } | null;
+  invigilators:
+    | {
+        full_name: string;
+      }
+    | {
+        full_name: string;
+      }[]
+    | null;
 };
 
 type CalendarGap = {
@@ -263,9 +268,13 @@ export default function AdminMyTeamTodayPage() {
         map[assignment.shift_slot_id] = [];
       }
 
-      if (assignment.invigilators?.full_name) {
-        map[assignment.shift_slot_id].push(assignment.invigilators.full_name);
-      }
+     const invigilator = Array.isArray(assignment.invigilators)
+  ? assignment.invigilators[0]
+  : assignment.invigilators;
+
+if (invigilator?.full_name) {
+  map[assignment.shift_slot_id].push(invigilator.full_name);
+}
     }
 
     return map;
