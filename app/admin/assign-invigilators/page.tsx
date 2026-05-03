@@ -239,6 +239,14 @@ export default function AssignInvigilatorsPage() {
   async function toggle(shiftId: string, invigilatorId: string) {
     const current = selected[shiftId] ?? [];
     const exists = current.includes(invigilatorId);
+    const shift = shifts.find(s => s.id === shiftId);
+
+    if (!exists && shift && current.length >= shift.needed) {
+      setStatus(
+        'This shift is already full. Untick someone first if you want to change it.'
+      );
+      return;
+    }
 
     const updated = exists
       ? current.filter(id => id !== invigilatorId)
@@ -261,9 +269,17 @@ export default function AssignInvigilatorsPage() {
     }
 
     const current = selected[shiftId] ?? [];
+    const shift = shifts.find(s => s.id === shiftId);
 
     if (current.includes(invigilatorId)) {
       setStatus('That invigilator is already selected for this shift');
+      return;
+    }
+
+    if (shift && current.length >= shift.needed) {
+      setStatus(
+        'This shift is already full. Untick someone first if you want to change it.'
+      );
       return;
     }
 
@@ -466,6 +482,7 @@ export default function AssignInvigilatorsPage() {
         <div style={{ display: 'grid', gap: 18 }}>
           {sortedShifts.map(shift => {
             const selectedIds = selected[shift.id] ?? [];
+            const limitReached = selectedIds.length >= shift.needed;
             const assignedCount = assigned[shift.id]?.length ?? 0;
             const remaining = Math.max(shift.needed - assignedCount, 0);
             const applicantRows = applicants[shift.id] ?? [];
@@ -540,26 +557,35 @@ export default function AssignInvigilatorsPage() {
                     <p style={{ color: '#6b7280' }}>No applicants yet</p>
                   ) : (
                     <div style={{ marginTop: 8, display: 'grid', gap: 8 }}>
-                      {applicantRows.map(app => (
-                        <label
-                          key={app.invigilator_id}
-                          style={{
-                            display: 'flex',
-                            gap: 8,
-                            alignItems: 'center',
-                          }}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={
-                              selected[shift.id]?.includes(app.invigilator_id) ??
-                              false
-                            }
-                            onChange={() => toggle(shift.id, app.invigilator_id)}
-                          />
-                          {app.name}
-                        </label>
-                      ))}
+                      {applicantRows.map(app => {
+                        const isChecked = selectedIds.includes(
+                          app.invigilator_id
+                        );
+                        const isDisabled = !isChecked && limitReached;
+
+                        return (
+                          <label
+                            key={app.invigilator_id}
+                            style={{
+                              display: 'flex',
+                              gap: 8,
+                              alignItems: 'center',
+                              opacity: isDisabled ? 0.4 : 1,
+                              cursor: isDisabled ? 'not-allowed' : 'pointer',
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              disabled={isDisabled}
+                              onChange={() =>
+                                toggle(shift.id, app.invigilator_id)
+                              }
+                            />
+                            {app.name}
+                          </label>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
