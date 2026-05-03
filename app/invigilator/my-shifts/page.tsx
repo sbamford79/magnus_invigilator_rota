@@ -24,9 +24,27 @@ function formatSession(session: SessionKey) {
   return session.charAt(0).toUpperCase() + session.slice(1);
 }
 
+function parseLocalDate(dateStr: string) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function isTodayOrFuture(dateStr: string) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const shiftDate = parseLocalDate(dateStr);
+  shiftDate.setHours(0, 0, 0, 0);
+
+  return shiftDate >= today;
+}
+
 function daysUntil(dateStr: string) {
   const today = new Date();
-  const target = new Date(dateStr);
+  today.setHours(0, 0, 0, 0);
+
+  const target = parseLocalDate(dateStr);
+  target.setHours(0, 0, 0, 0);
 
   const diff = target.getTime() - today.getTime();
   return Math.ceil(diff / (1000 * 60 * 60 * 24));
@@ -49,8 +67,10 @@ export default function MyShiftsPage() {
   async function loadShifts() {
     setStatus('');
 
-    const { data: authData } = await supabase.auth.getUser();
-    if (!authData.user) {
+    const { data: authData } = await supabase.auth.getSession();
+    const user = authData.session?.user;
+
+    if (!user) {
       setStatus('Not logged in');
       return;
     }
@@ -58,7 +78,7 @@ export default function MyShiftsPage() {
     const { data: invigilator } = await supabase
       .from('invigilators')
       .select('id')
-      .eq('auth_user_id', authData.user.id)
+      .eq('auth_user_id', user.id)
       .single();
 
     if (!invigilator) {
@@ -95,6 +115,7 @@ export default function MyShiftsPage() {
         date: row.shift_slots?.exam_days?.exam_date,
         label: row.shift_slots?.exam_days?.label,
       }))
+      .filter(shift => shift.date && isTodayOrFuture(shift.date))
       .sort((a, b) => {
         if (a.date !== b.date) return a.date.localeCompare(b.date);
         return (sessionOrder[a.session] ?? 99) - (sessionOrder[b.session] ?? 99);
@@ -109,8 +130,10 @@ export default function MyShiftsPage() {
     );
     if (!confirmRelease) return;
 
-    const { data: authData } = await supabase.auth.getUser();
-    if (!authData.user) {
+    const { data: authData } = await supabase.auth.getSession();
+    const user = authData.session?.user;
+
+    if (!user) {
       setStatus('Not logged in');
       return;
     }
@@ -118,7 +141,7 @@ export default function MyShiftsPage() {
     const { data: invigilator } = await supabase
       .from('invigilators')
       .select('id')
-      .eq('auth_user_id', authData.user.id)
+      .eq('auth_user_id', user.id)
       .single();
 
     if (!invigilator) {
@@ -218,7 +241,7 @@ export default function MyShiftsPage() {
             boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
           }}
         >
-          <p style={{ margin: 0, color: '#555' }}>No assigned shifts.</p>
+          <p style={{ margin: 0, color: '#555' }}>No upcoming assigned shifts.</p>
         </div>
       ) : (
         <div
