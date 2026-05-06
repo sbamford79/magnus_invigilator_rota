@@ -69,19 +69,19 @@ export default function InvigilatorHomePage() {
 
       <div style={infoGrid}>
         <div style={infoCard}>
-          <h2 style={sectionTitle}>Mock Exams</h2>
+          <h2 style={sectionTitle}>Mock Exams: Last Updated 6/5/26</h2>
           <p style={sectionText}>
-            During mock exam seasons there will be 3 sessions in a day. The
-            exams will begin at 8:45am, 11:30am and 1:45pm. Please arrive 30
+            During the Y10 mock exam seasons there will be 2 sessions in a day. The
+            exams will begin at 8:45am and 1:00pm. Please arrive 30
             minutes before these start times.
           </p>
         </div>
 
         <div style={infoCard}>
-          <h2 style={sectionTitle}>Summer Exams</h2>
+          <h2 style={sectionTitle}>Summer Exams: Last Updated 6/5/26</h2>
           <p style={sectionText}>
             During the summer exam season there will be 2 sessions in a day.
-            The exams will begin at 9:00am and 1:30pm. Please arrive 30 minutes
+            The exams will begin at 9:00am and 1:00pm. Please arrive 30 minutes
             before these start times.
           </p>
         </div>
