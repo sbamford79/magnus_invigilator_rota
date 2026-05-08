@@ -14,7 +14,6 @@ type ShiftGroup = {
   date: string;
   label: string;
   assigned: ShiftItem[];
-  applied: ShiftItem[];
 };
 
 function toYMD(date: Date) {
@@ -210,24 +209,10 @@ export default function InvigilatorCalendarPage() {
           date: shift.date,
           label: shift.label,
           assigned: [],
-          applied: [],
         });
       }
 
       groups.get(shift.date)!.assigned.push(shift);
-    }
-
-    for (const shift of appliedShifts) {
-      if (!groups.has(shift.date)) {
-        groups.set(shift.date, {
-          date: shift.date,
-          label: shift.label,
-          assigned: [],
-          applied: [],
-        });
-      }
-
-      groups.get(shift.date)!.applied.push(shift);
     }
 
     return Array.from(groups.values())
@@ -235,9 +220,8 @@ export default function InvigilatorCalendarPage() {
       .map(group => ({
         ...group,
         assigned: group.assigned.sort(sortBySessionOrder),
-        applied: group.applied.sort(sortBySessionOrder),
       }));
-  }, [assignedShifts, appliedShifts]);
+  }, [assignedShifts]);
 
   const todayYMD = toYMD(new Date());
 
@@ -373,7 +357,7 @@ export default function InvigilatorCalendarPage() {
       <section style={fullListCard}>
         <h2 style={fullListTitle}>All My Shifts</h2>
         <p style={fullListIntro}>
-          A full list of your assigned and applied shifts for the season.
+          A full list of your assigned shifts for the season.
         </p>
 
         {fullShiftList.length === 0 ? (
@@ -393,17 +377,6 @@ export default function InvigilatorCalendarPage() {
                       <span style={assignedBadge}>Assigned</span>
                       <span>
                         {group.assigned
-                          .map(shift => formatSession(shift.session))
-                          .join(', ')}
-                      </span>
-                    </div>
-                  )}
-
-                  {group.applied.length > 0 && (
-                    <div style={shiftGroupLine}>
-                      <span style={appliedBadge}>Applied</span>
-                      <span>
-                        {group.applied
                           .map(shift => formatSession(shift.session))
                           .join(', ')}
                       </span>
