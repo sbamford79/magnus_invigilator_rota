@@ -56,6 +56,64 @@ const sessionOrder: Record<SessionKey, number> = {
   afternoon: 3,
 };
 
+const sessionTimes: Record<SessionKey, { start: string; end: string }> = {
+  morning: { start: '09:00', end: '11:30' },
+  mid: { start: '11:30', end: '13:00' },
+  afternoon: { start: '13:00', end: '15:30' },
+};
+
+function toCalendarDateTime(dateStr: string, timeStr: string) {
+  const date = dateStr.replaceAll('-', '');
+  const time = timeStr.replace(':', '') + '00';
+  return `${date}T${time}`;
+}
+
+function escapeCalendarText(text: string) {
+  return text
+    .replace(/\\/g, '\\\\')
+    .replace(/;/g, '\\;')
+    .replace(/,/g, '\\,')
+    .replace(/\n/g, '\\n');
+}
+
+function addShiftToCalendar(shift: MyShift) {
+  const time = sessionTimes[shift.session];
+  const sessionName = formatSession(shift.session);
+
+  const title = `Magnus Invigilation - ${sessionName}`;
+  const description = `${shift.label} - ${sessionName} session`;
+
+  const icsContent = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Magnus Academy//Invigilator Rota//EN',
+    'BEGIN:VEVENT',
+    `UID:${shift.assignmentId}@magnus-invigilator-rota`,
+    `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}Z`,
+    `DTSTART:${toCalendarDateTime(shift.date, time.start)}`,
+    `DTEND:${toCalendarDateTime(shift.date, time.end)}`,
+    `SUMMARY:${escapeCalendarText(title)}`,
+    `DESCRIPTION:${escapeCalendarText(description)}`,
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ].join('\r\n');
+
+  const blob = new Blob([icsContent], {
+    type: 'text/calendar;charset=utf-8',
+  });
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+
+  link.href = url;
+  link.download = `magnus-${shift.date}-${shift.session}.ics`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+
+  URL.revokeObjectURL(url);
+}
+
 export default function MyShiftsPage() {
   const [shifts, setShifts] = useState<MyShift[]>([]);
   const [status, setStatus] = useState('Loading...');
@@ -297,51 +355,84 @@ export default function MyShiftsPage() {
                 </div>
 
                 <div style={{ display: 'grid', gap: 14 }}>
-                  {group.shifts.map(shift => (
-                    <div
-                      key={shift.assignmentId}
-                      style={{
-                        borderTop: '1px solid #f1f5f9',
-                        paddingTop: 10,
-                      }}
-                    >
-                      <div style={{ marginBottom: 8 }}>
-                        <strong>Session:</strong> {formatSession(shift.session)}
-                      </div>
+                  {group.shifts.map(shift => {
+                    const time = sessionTimes[shift.session];
 
-                      {canRelease ? (
-                        <button
-                          onClick={() =>
-                            releaseShift(shift.assignmentId, shift.shiftSlotId)
-                          }
-                          style={{
-                            background: '#4c1d95',
-                            color: 'white',
-                            border: 'none',
-                            padding: '8px 12px',
-                            borderRadius: 8,
-                            cursor: 'pointer',
-                            fontWeight: 700,
-                          }}
-                        >
-                          Release shift
-                        </button>
-                      ) : (
+                    return (
+                      <div
+                        key={shift.assignmentId}
+                        style={{
+                          borderTop: '1px solid #f1f5f9',
+                          paddingTop: 10,
+                        }}
+                      >
+                        <div style={{ marginBottom: 8 }}>
+                          <strong>Session:</strong>{' '}
+                          {formatSession(shift.session)} ({time.start}–
+                          {time.end})
+                        </div>
+
                         <div
                           style={{
-                            padding: '8px 10px',
-                            borderRadius: 8,
-                            background: '#f9fafb',
-                            border: '1px solid #e5e7eb',
-                            color: '#6b7280',
-                            fontWeight: 600,
+                            display: 'flex',
+                            gap: 10,
+                            flexWrap: 'wrap',
+                            alignItems: 'center',
                           }}
                         >
-                          Cannot release within 10 days
+                          <button
+                            onClick={() => addShiftToCalendar(shift)}
+                            style={{
+                              background: '#f5f3ff',
+                              color: '#4c1d95',
+                              border: '1px solid #ddd6fe',
+                              padding: '8px 12px',
+                              borderRadius: 8,
+                              cursor: 'pointer',
+                              fontWeight: 700,
+                            }}
+                          >
+                            Add to calendar
+                          </button>
+
+                          {canRelease ? (
+                            <button
+                              onClick={() =>
+                                releaseShift(
+                                  shift.assignmentId,
+                                  shift.shiftSlotId
+                                )
+                              }
+                              style={{
+                                background: '#4c1d95',
+                                color: 'white',
+                                border: 'none',
+                                padding: '8px 12px',
+                                borderRadius: 8,
+                                cursor: 'pointer',
+                                fontWeight: 700,
+                              }}
+                            >
+                              Release shift
+                            </button>
+                          ) : (
+                            <div
+                              style={{
+                                padding: '8px 10px',
+                                borderRadius: 8,
+                                background: '#f9fafb',
+                                border: '1px solid #e5e7eb',
+                                color: '#6b7280',
+                                fontWeight: 600,
+                              }}
+                            >
+                              Cannot release within 10 days
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
-                  ))}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             );
