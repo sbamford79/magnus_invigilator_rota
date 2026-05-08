@@ -10,6 +10,13 @@ type ShiftItem = {
   session: string;
 };
 
+type ShiftGroup = {
+  date: string;
+  label: string;
+  assigned: ShiftItem[];
+  applied: ShiftItem[];
+};
+
 function toYMD(date: Date) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -194,6 +201,44 @@ export default function InvigilatorCalendarPage() {
     [appliedShifts, selectedDate]
   );
 
+  const fullShiftList = useMemo(() => {
+    const groups = new Map<string, ShiftGroup>();
+
+    for (const shift of assignedShifts) {
+      if (!groups.has(shift.date)) {
+        groups.set(shift.date, {
+          date: shift.date,
+          label: shift.label,
+          assigned: [],
+          applied: [],
+        });
+      }
+
+      groups.get(shift.date)!.assigned.push(shift);
+    }
+
+    for (const shift of appliedShifts) {
+      if (!groups.has(shift.date)) {
+        groups.set(shift.date, {
+          date: shift.date,
+          label: shift.label,
+          assigned: [],
+          applied: [],
+        });
+      }
+
+      groups.get(shift.date)!.applied.push(shift);
+    }
+
+    return Array.from(groups.values())
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .map(group => ({
+        ...group,
+        assigned: group.assigned.sort(sortBySessionOrder),
+        applied: group.applied.sort(sortBySessionOrder),
+      }));
+  }, [assignedShifts, appliedShifts]);
+
   const todayYMD = toYMD(new Date());
 
   function goPrevMonth() {
@@ -291,7 +336,7 @@ export default function InvigilatorCalendarPage() {
         </div>
       </div>
 
-      <div style={{ marginTop: 16 }}>
+      <div style={selectedDayBox}>
         <h2 style={{ fontSize: 18, marginBottom: 10 }}>Shifts</h2>
 
         <div style={{ marginBottom: 14 }}>
@@ -324,6 +369,52 @@ export default function InvigilatorCalendarPage() {
           )}
         </div>
       </div>
+
+      <section style={fullListCard}>
+        <h2 style={fullListTitle}>All My Shifts</h2>
+        <p style={fullListIntro}>
+          A full list of your assigned and applied shifts for the season.
+        </p>
+
+        {fullShiftList.length === 0 ? (
+          <div style={emptyFullList}>No shifts to show yet.</div>
+        ) : (
+          <div style={{ display: 'grid', gap: 10 }}>
+            {fullShiftList.map(group => (
+              <div key={group.date} style={shiftListRow}>
+                <div style={dateColumn}>
+                  <div style={dateLabel}>{group.label}</div>
+                  <div style={dateSmall}>{group.date}</div>
+                </div>
+
+                <div style={shiftColumn}>
+                  {group.assigned.length > 0 && (
+                    <div style={shiftGroupLine}>
+                      <span style={assignedBadge}>Assigned</span>
+                      <span>
+                        {group.assigned
+                          .map(shift => formatSession(shift.session))
+                          .join(', ')}
+                      </span>
+                    </div>
+                  )}
+
+                  {group.applied.length > 0 && (
+                    <div style={shiftGroupLine}>
+                      <span style={appliedBadge}>Applied</span>
+                      <span>
+                        {group.applied
+                          .map(shift => formatSession(shift.session))
+                          .join(', ')}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
@@ -333,6 +424,15 @@ const calendarBox: React.CSSProperties = {
   padding: 10,
   borderRadius: 10,
   background: '#fff',
+};
+
+const selectedDayBox: React.CSSProperties = {
+  marginTop: 16,
+  background: 'white',
+  border: '1px solid #e5e7eb',
+  borderRadius: 14,
+  padding: 16,
+  boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
 };
 
 const header: React.CSSProperties = {
@@ -378,4 +478,91 @@ const navButtonStyle: React.CSSProperties = {
   padding: '6px 10px',
   cursor: 'pointer',
   fontSize: 16,
+};
+
+const fullListCard: React.CSSProperties = {
+  marginTop: 18,
+  background: 'white',
+  border: '1px solid #e5e7eb',
+  borderRadius: 16,
+  padding: 18,
+  boxShadow: '0 4px 14px rgba(0,0,0,0.06)',
+};
+
+const fullListTitle: React.CSSProperties = {
+  margin: 0,
+  color: '#4c1d95',
+  fontSize: 22,
+};
+
+const fullListIntro: React.CSSProperties = {
+  marginTop: 6,
+  marginBottom: 16,
+  color: '#6b7280',
+};
+
+const emptyFullList: React.CSSProperties = {
+  color: '#6b7280',
+  padding: 14,
+  background: '#f9fafb',
+  border: '1px solid #e5e7eb',
+  borderRadius: 12,
+};
+
+const shiftListRow: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(150px, 1fr) 2fr',
+  gap: 12,
+  alignItems: 'start',
+  padding: 12,
+  border: '1px solid #ede9fe',
+  borderRadius: 12,
+  background: '#fafafa',
+};
+
+const dateColumn: React.CSSProperties = {
+  minWidth: 0,
+};
+
+const dateLabel: React.CSSProperties = {
+  color: '#4c1d95',
+  fontWeight: 800,
+};
+
+const dateSmall: React.CSSProperties = {
+  marginTop: 3,
+  color: '#6b7280',
+  fontSize: 12,
+};
+
+const shiftColumn: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
+};
+
+const shiftGroupLine: React.CSSProperties = {
+  display: 'flex',
+  gap: 8,
+  alignItems: 'center',
+  flexWrap: 'wrap',
+};
+
+const assignedBadge: React.CSSProperties = {
+  display: 'inline-block',
+  background: '#dbeafe',
+  color: '#1d4ed8',
+  borderRadius: 999,
+  padding: '4px 8px',
+  fontSize: 12,
+  fontWeight: 800,
+};
+
+const appliedBadge: React.CSSProperties = {
+  display: 'inline-block',
+  background: '#f3f4f6',
+  color: '#4b5563',
+  borderRadius: 999,
+  padding: '4px 8px',
+  fontSize: 12,
+  fontWeight: 800,
 };
