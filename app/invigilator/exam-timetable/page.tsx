@@ -92,7 +92,7 @@ export default function InvigilatorExamTimetablePage() {
       .from('seasons')
       .select('id')
       .eq('status', 'active')
-      .order('name', { ascending: true })
+      .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
 
