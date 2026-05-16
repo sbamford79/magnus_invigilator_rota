@@ -184,21 +184,22 @@ const pmCandidates = examsForSelectedDate
 
       {status && <div style={statusBox}>{status}</div>}
 
-      <div style={infoCard}>
-        <span style={smallLabel}>AM Candidates</span>
-        <strong style={infoValue}>{amCandidates}</strong>
-      </div>
+     <div style={infoGrid}>
+  <div style={infoCard}>
+    <span style={smallLabel}>Timetable rows</span>
+    <strong style={infoValue}>{exams.length}</strong>
+  </div>
 
-      <div style={infoCard}>
-       <span style={smallLabel}>PM Candidates</span>
-       <strong style={infoValue}>{pmCandidates}</strong>
-      </div>
+  <div style={infoCard}>
+    <span style={smallLabel}>AM Candidates</span>
+    <strong style={infoValue}>{amCandidates}</strong>
+  </div>
 
-        <div style={infoCard}>
-          <span style={smallLabel}>Selected date candidates</span>
-          <strong style={infoValue}>{totalStudentsForSelectedDate}</strong>
-        </div>
-      </div>
+  <div style={infoCard}>
+    <span style={smallLabel}>PM Candidates</span>
+    <strong style={infoValue}>{pmCandidates}</strong>
+  </div>
+</div> 
 
       <div style={mainGrid}>
         <section style={calendarCard}>
