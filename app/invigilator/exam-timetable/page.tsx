@@ -276,7 +276,7 @@ const pmCandidates = examsForSelectedDate
 
             <div>
               <span style={smallLabel}>AM Candidates</span>
-              <strong style={infoValue}>{amcandidates}</strong>
+              <strong style={infoValue}>{amCandidates}</strong>
             </div>
 
             <div>
