@@ -229,10 +229,10 @@ export default function ExamTimetablePage() {
       const headers = rows[0].map(header => header.trim());
       const dataRows = rows.slice(1);
 
-      function get(row: string[], name: string) {
+      const get = (row: string[], name: string) => {
         const index = headers.indexOf(name);
         return index >= 0 ? row[index] ?? '' : '';
-      }
+      };
 
       const mappedRows = dataRows
         .map(row => {
