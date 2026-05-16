@@ -1,11 +1,10 @@
 'use client';
 
-import { useContext, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
-import { SeasonContext } from '../SeasonContext';
 
 type ExamRow = {
-  id: string;
+  id: string | number;
   season_id: string | null;
   exam_date: string;
   exam_time: string | null;
@@ -15,11 +14,6 @@ type ExamRow = {
   student_count: number | null;
   duration_minutes: number | null;
   notes: string | null;
-};
-
-type CalendarCell = {
-  date: Date | null;
-  key: string;
 };
 
 function toYMD(date: Date) {
@@ -50,7 +44,7 @@ function formatLongDate(dateStr: string) {
   });
 }
 
-function buildCalendarDays(viewDate: Date): CalendarCell[] {
+function buildCalendarDays(viewDate: Date) {
   const year = viewDate.getFullYear();
   const month = viewDate.getMonth();
 
@@ -58,7 +52,7 @@ function buildCalendarDays(viewDate: Date): CalendarCell[] {
   const startDay = (firstOfMonth.getDay() + 6) % 7;
   const daysInMonth = new Date(year, month + 1, 0).getDate();
 
-  const cells: CalendarCell[] = [];
+  const cells: Array<{ date: Date | null; key: string }> = [];
 
   for (let i = 0; i < startDay; i++) {
     cells.push({ date: null, key: `blank-start-${i}` });
@@ -78,103 +72,9 @@ function buildCalendarDays(viewDate: Date): CalendarCell[] {
   return cells;
 }
 
-function parseCsv(text: string) {
-  const rows: string[][] = [];
-  let current = '';
-  let row: string[] = [];
-  let inQuotes = false;
-
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i];
-    const next = text[i + 1];
-
-    if (char === '"' && inQuotes && next === '"') {
-      current += '"';
-      i++;
-    } else if (char === '"') {
-      inQuotes = !inQuotes;
-    } else if (char === ',' && !inQuotes) {
-      row.push(current.trim());
-      current = '';
-    } else if ((char === '\n' || char === '\r') && !inQuotes) {
-      if (char === '\r' && next === '\n') i++;
-      row.push(current.trim());
-      if (row.some(cell => cell !== '')) rows.push(row);
-      row = [];
-      current = '';
-    } else {
-      current += char;
-    }
-  }
-
-  row.push(current.trim());
-  if (row.some(cell => cell !== '')) rows.push(row);
-
-  return rows;
-}
-
-function normaliseDate(value: string) {
-  if (!value) return '';
-
-  const trimmed = value.trim();
-
-  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
-
-  const slashMatch = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (slashMatch) {
-    const [, d, m, y] = slashMatch;
-    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
-  }
-
-  const parsed = new Date(trimmed);
-  if (!Number.isNaN(parsed.getTime())) {
-    return toYMD(parsed);
-  }
-
-  return '';
-}
-
-function toNumber(value: string) {
-  const parsed = Number(String(value ?? '').replace(/[^\d.]/g, ''));
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function durationToMinutes(value: string) {
-  const text = String(value ?? '').trim();
-
-  if (!text) return 0;
-
-  const numeric = Number(text);
-  if (Number.isFinite(numeric)) return numeric;
-
-  const hourMinute = text.match(/(\d+):(\d+)/);
-  if (hourMinute) {
-    return Number(hourMinute[1]) * 60 + Number(hourMinute[2]);
-  }
-
-  const hours = text.match(/(\d+)\s*h/i);
-  const mins = text.match(/(\d+)\s*m/i);
-
-  return (hours ? Number(hours[1]) * 60 : 0) + (mins ? Number(mins[1]) : 0);
-}
-
-function cleanTime(value: string) {
-  const text = String(value ?? '').trim();
-  const match = text.match(/(\d{1,2}):(\d{2})/);
-
-  if (match) {
-    return `${match[1].padStart(2, '0')}:${match[2]}`;
-  }
-
-  return text;
-}
-
-export default function ExamTimetablePage() {
-  const { currentSeason } = useContext(SeasonContext);
-
+export default function InvigilatorExamTimetablePage() {
   const [exams, setExams] = useState<ExamRow[]>([]);
-  const [status, setStatus] = useState('');
-  const [uploading, setUploading] = useState(false);
+  const [status, setStatus] = useState('Loading timetable...');
   const [selectedDate, setSelectedDate] = useState(toYMD(new Date()));
   const [viewDate, setViewDate] = useState(() => {
     const today = new Date();
@@ -182,20 +82,34 @@ export default function ExamTimetablePage() {
   });
 
   useEffect(() => {
-    if (currentSeason?.id) {
-      loadExams();
-    }
-  }, [currentSeason?.id]);
+    loadExams();
+  }, []);
 
   async function loadExams() {
-    if (!currentSeason?.id) return;
+    setStatus('Loading timetable...');
 
-    setStatus('');
+    const { data: activeSeason, error: seasonError } = await supabase
+      .from('seasons')
+      .select('id')
+      .eq('status', 'active')
+      .order('name', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    if (seasonError) {
+      setStatus(seasonError.message);
+      return;
+    }
+
+    if (!activeSeason?.id) {
+      setStatus('No active season found.');
+      return;
+    }
 
     const { data, error } = await supabase
       .from('exam_timetable')
       .select('*')
-      .eq('season_id', currentSeason.id)
+      .eq('season_id', activeSeason.id)
       .order('exam_date', { ascending: true })
       .order('exam_time', { ascending: true });
 
@@ -204,99 +118,16 @@ export default function ExamTimetablePage() {
       return;
     }
 
-    setExams((data ?? []) as ExamRow[]);
-  }
+    const loaded = (data ?? []) as ExamRow[];
+    setExams(loaded);
 
-  async function handleCsvUpload(file: File) {
-    if (!currentSeason?.id) {
-      setStatus('Please select a season first.');
-      return;
+    if (loaded.length > 0) {
+      setSelectedDate(loaded[0].exam_date);
+      const firstDate = parseDate(loaded[0].exam_date);
+      setViewDate(new Date(firstDate.getFullYear(), firstDate.getMonth(), 1));
     }
 
-    setUploading(true);
-    setStatus('Reading CSV...');
-
-    try {
-      const text = await file.text();
-      const rows = parseCsv(text);
-
-      if (rows.length < 2) {
-        setStatus('No rows found in CSV.');
-        setUploading(false);
-        return;
-      }
-
-      const headers = rows[0].map(header => header.trim());
-      const dataRows = rows.slice(1);
-
-      const get = (row: string[], name: string) => {
-        const index = headers.indexOf(name);
-        return index >= 0 ? row[index] ?? '' : '';
-      };
-
-      const mappedRows = dataRows
-        .map(row => {
-          const examDate = normaliseDate(get(row, 'ComponentDate'));
-
-          return {
-            season_id: currentSeason.id,
-            exam_date: examDate,
-            exam_time: cleanTime(get(row, 'ComponentTime')),
-            exam_level: get(row, 'ExamLevelName'),
-            exam_board: get(row, 'BoardShortName'),
-            paper_code: get(row, 'ExamOptionCode') || get(row, 'ComponentCode'),
-            student_count: toNumber(get(row, 'ComponentNoOfCands')),
-            duration_minutes: durationToMinutes(get(row, 'CDuration')),
-            notes: get(row, 'ComponentLocalName'),
-          };
-        })
-        .filter(row => row.exam_date);
-
-      if (mappedRows.length === 0) {
-        setStatus('No usable exam rows found. Please check the CSV format.');
-        setUploading(false);
-        return;
-      }
-
-      setStatus('Clearing old timetable for this season...');
-
-      const { error: deleteError } = await supabase
-        .from('exam_timetable')
-        .delete()
-        .eq('season_id', currentSeason.id);
-
-      if (deleteError) {
-        setStatus(deleteError.message);
-        setUploading(false);
-        return;
-      }
-
-      setStatus('Uploading timetable...');
-
-      const { error: insertError } = await supabase
-        .from('exam_timetable')
-        .insert(mappedRows);
-
-      if (insertError) {
-        setStatus(insertError.message);
-        setUploading(false);
-        return;
-      }
-
-      setStatus(`Uploaded ${mappedRows.length} exam rows.`);
-      await loadExams();
-
-      const firstDate = mappedRows[0]?.exam_date;
-      if (firstDate) {
-        setSelectedDate(firstDate);
-        const d = parseDate(firstDate);
-        setViewDate(new Date(d.getFullYear(), d.getMonth(), 1));
-      }
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'Upload failed');
-    }
-
-    setUploading(false);
+    setStatus('');
   }
 
   const calendarCells = useMemo(() => buildCalendarDays(viewDate), [viewDate]);
@@ -337,8 +168,8 @@ const pmCandidates = examsForSelectedDate
     setViewDate(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
   }
 
-  if (!currentSeason) {
-    return <div style={page}>No season selected.</div>;
+  if (status === 'Loading timetable...') {
+    return <div style={page}>Loading timetable...</div>;
   }
 
   return (
@@ -346,44 +177,24 @@ const pmCandidates = examsForSelectedDate
       <div style={hero}>
         <h1 style={heroTitle}>Exam Timetable</h1>
         <p style={heroText}>
-          Upload your timetable CSV, then click a date to see the exams and
-          candidate numbers for that day.
+          Click a date to see which exams are taking place and how many
+          candidates are sitting each paper.
         </p>
       </div>
 
-      <div style={infoGrid}>
-        <div style={infoCard}>
-          <span style={smallLabel}>Current season</span>
-          <strong style={infoValue}>{currentSeason.name}</strong>
-        </div>
+      {status && <div style={statusBox}>{status}</div>}
 
+      <div style={infoGrid}>
         <div style={infoCard}>
           <span style={smallLabel}>Timetable rows</span>
           <strong style={infoValue}>{exams.length}</strong>
         </div>
+
+        <div style={infoCard}>
+          <span style={smallLabel}>Selected date candidates</span>
+          <strong style={infoValue}>{totalStudentsForSelectedDate}</strong>
+        </div>
       </div>
-
-      <section style={uploadCard}>
-        <h2 style={sectionTitle}>Upload timetable CSV</h2>
-        <p style={muted}>
-          Uploading a CSV will replace the existing timetable for the selected
-          season only.
-        </p>
-
-        <input
-          type="file"
-          accept=".csv,text/csv"
-          disabled={uploading}
-          onChange={event => {
-            const file = event.target.files?.[0];
-            if (file) handleCsvUpload(file);
-            event.target.value = '';
-          }}
-          style={fileInput}
-        />
-
-        {status && <div style={statusBox}>{status}</div>}
-      </section>
 
       <div style={mainGrid}>
         <section style={calendarCard}>
@@ -416,6 +227,7 @@ const pmCandidates = examsForSelectedDate
               const ymd = toYMD(cell.date);
               const hasExams = examDates.has(ymd);
               const isSelected = ymd === selectedDate;
+              const examCount = exams.filter(e => e.exam_date === ymd).length;
 
               return (
                 <button
@@ -438,7 +250,7 @@ const pmCandidates = examsForSelectedDate
                   }}
                 >
                   <span>{cell.date.getDate()}</span>
-                  {hasExams && <span style={dot}>{exams.filter(e => e.exam_date === ymd).length}</span>}
+                  {hasExams && <span style={dot}>{examCount}</span>}
                 </button>
               );
             })}
@@ -452,16 +264,21 @@ const pmCandidates = examsForSelectedDate
           </h2>
 
           <div style={summaryStats}>
-           <div>
-             <span style={smallLabel}>AM Candidates</span>
-             <strong style={infoValue}>{amCandidates}</strong>
-          </div>
+            <div>
+              <span style={smallLabel}>Exams</span>
+              <strong style={infoValue}>{examsForSelectedDate.length}</strong>
+            </div>
 
-           <div>
-             <span style={smallLabel}>PM Candidates</span>
+            <div>
+              <span style={smallLabel}>AM Candidates</span>
+              <strong style={infoValue}>{amcandidates}</strong>
+            </div>
+
+            <div>
+             <span style={smallLabel}>PM candidates</span>
              <strong style={infoValue}>{pmCandidates}</strong>
-           </div>
-         </div>
+            </div>
+          </div>
         </section>
       </div>
 
@@ -484,6 +301,12 @@ const pmCandidates = examsForSelectedDate
                   </div>
 
                   {exam.notes && <div style={examNotes}>{exam.notes}</div>}
+
+                  {exam.duration_minutes !== null && (
+                    <div style={examMeta}>
+                      Duration: {exam.duration_minutes} minutes
+                    </div>
+                  )}
                 </div>
 
                 <div style={studentBadge}>
@@ -525,6 +348,16 @@ const heroText: React.CSSProperties = {
   opacity: 0.95,
 };
 
+const statusBox: React.CSSProperties = {
+  marginBottom: 18,
+  color: '#4c1d95',
+  background: '#f5f3ff',
+  border: '1px solid #ddd6fe',
+  borderRadius: 10,
+  padding: 12,
+  fontWeight: 700,
+};
+
 const infoGrid: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
@@ -551,38 +384,6 @@ const smallLabel: React.CSSProperties = {
 const infoValue: React.CSSProperties = {
   color: '#4c1d95',
   fontSize: 18,
-};
-
-const uploadCard: React.CSSProperties = {
-  background: 'white',
-  border: '1px solid #e5e7eb',
-  borderRadius: 16,
-  padding: 20,
-  marginBottom: 20,
-  boxShadow: '0 4px 14px rgba(0,0,0,0.06)',
-};
-
-const sectionTitle: React.CSSProperties = {
-  marginTop: 0,
-  color: '#4c1d95',
-};
-
-const muted: React.CSSProperties = {
-  color: '#6b7280',
-};
-
-const fileInput: React.CSSProperties = {
-  marginTop: 10,
-};
-
-const statusBox: React.CSSProperties = {
-  marginTop: 14,
-  color: '#4c1d95',
-  background: '#f5f3ff',
-  border: '1px solid #ddd6fe',
-  borderRadius: 10,
-  padding: 12,
-  fontWeight: 700,
 };
 
 const mainGrid: React.CSSProperties = {
@@ -685,6 +486,15 @@ const examListCard: React.CSSProperties = {
   boxShadow: '0 4px 14px rgba(0,0,0,0.06)',
 };
 
+const sectionTitle: React.CSSProperties = {
+  marginTop: 0,
+  color: '#4c1d95',
+};
+
+const muted: React.CSSProperties = {
+  color: '#6b7280',
+};
+
 const examRow: React.CSSProperties = {
   display: 'flex',
   justifyContent: 'space-between',
@@ -705,6 +515,7 @@ const examTitle: React.CSSProperties = {
 const examMeta: React.CSSProperties = {
   color: '#6b7280',
   fontSize: 13,
+  marginTop: 4,
 };
 
 const examNotes: React.CSSProperties = {

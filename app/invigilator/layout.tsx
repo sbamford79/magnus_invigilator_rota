@@ -159,6 +159,10 @@ export default function InvigilatorLayout({
               My Team Today
             </NavLink>
 
+            <NavLink href="/invigilator/exam-timetable" currentPath={pathname}>
+              Exam Timetable
+            </NavLink>
+
             {notificationPermission !== 'granted' &&
               notificationPermission !== 'unsupported' && (
                 <button
