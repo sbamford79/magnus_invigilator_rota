@@ -505,10 +505,10 @@ async function uploadRoomRequirements(
 
     const dataRows = rows.slice(1);
 
-    function get(row: string[], name: string) {
+    const get = (row: string[], name: string) => {
       const index = headers.indexOf(name);
       return index >= 0 ? row[index]?.replace(/"/g, '') ?? '' : '';
-    }
+    };
 
     await supabase
       .from('room_requirements')
