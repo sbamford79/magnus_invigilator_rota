@@ -311,23 +311,23 @@ export default function ExamTimetablePage() {
     [exams, selectedDate]
   );
 
- const amCandidates = examsForSelectedDate
-  .filter(exam => {
-    if (!exam.exam_time) return false;
+  const amCandidates = examsForSelectedDate
+    .filter(exam => {
+      if (!exam.exam_time) return false;
 
-    const hour = parseInt(exam.exam_time.split(':')[0] || '0');
-    return hour < 12;
-  })
-  .reduce((total, exam) => total + (exam.student_count ?? 0), 0);
+      const hour = parseInt(exam.exam_time.split(':')[0] || '0');
+      return hour < 12;
+    })
+    .reduce((total, exam) => total + (exam.student_count ?? 0), 0);
 
-const pmCandidates = examsForSelectedDate
-  .filter(exam => {
-    if (!exam.exam_time) return false;
+  const pmCandidates = examsForSelectedDate
+    .filter(exam => {
+      if (!exam.exam_time) return false;
 
-    const hour = parseInt(exam.exam_time.split(':')[0] || '0');
-    return hour >= 12;
-  })
-  .reduce((total, exam) => total + (exam.student_count ?? 0), 0);
+      const hour = parseInt(exam.exam_time.split(':')[0] || '0');
+      return hour >= 12;
+    })
+    .reduce((total, exam) => total + (exam.student_count ?? 0), 0);
 
   function goPrevMonth() {
     setViewDate(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
@@ -433,7 +433,12 @@ const pmCandidates = examsForSelectedDate
                   }}
                 >
                   <span>{cell.date.getDate()}</span>
-                  {hasExams && <span style={dot}>{exams.filter(e => e.exam_date === ymd).length}</span>}
+
+                  {hasExams && (
+                    <span style={dot}>
+                      {exams.filter(e => e.exam_date === ymd).length}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -442,37 +447,40 @@ const pmCandidates = examsForSelectedDate
 
         <section style={summaryCard}>
           <span style={smallLabel}>Selected date</span>
+
           <h2 style={{ margin: '4px 0 10px 0', color: '#4c1d95' }}>
             {formatLongDate(selectedDate)}
           </h2>
 
-       <div style={summaryStats}>
-  <div
-    style={{
-      background: '#faf5ff',
-      border: '1px solid #ddd6fe',
-      borderRadius: 12,
-      padding: 14,
-      textAlign: 'center',
-    }}
-  >
-    <span style={smallLabel}>AM Candidates</span>
-    <strong style={infoValue}>{amCandidates}</strong>
-  </div>
+          <div style={summaryStats}>
+            <div
+              style={{
+                background: '#faf5ff',
+                border: '1px solid #ddd6fe',
+                borderRadius: 12,
+                padding: 14,
+                textAlign: 'center',
+              }}
+            >
+              <span style={smallLabel}>AM Candidates</span>
+              <strong style={infoValue}>{amCandidates}</strong>
+            </div>
 
-  <div
-    style={{
-      background: '#faf5ff',
-      border: '1px solid #ddd6fe',
-      borderRadius: 12,
-      padding: 14,
-      textAlign: 'center',
-    }}
-  >
-    <span style={smallLabel}>PM Candidates</span>
-    <strong style={infoValue}>{pmCandidates}</strong>
-  </div>
-</div>
+            <div
+              style={{
+                background: '#faf5ff',
+                border: '1px solid #ddd6fe',
+                borderRadius: 12,
+                padding: 14,
+                textAlign: 'center',
+              }}
+            >
+              <span style={smallLabel}>PM Candidates</span>
+              <strong style={infoValue}>{pmCandidates}</strong>
+            </div>
+          </div>
+        </section>
+      </div>
 
       <section style={examListCard}>
         <h2 style={sectionTitle}>Exams on selected date</h2>
@@ -485,11 +493,13 @@ const pmCandidates = examsForSelectedDate
               <div key={exam.id} style={examRow}>
                 <div>
                   <div style={examTitle}>
-                    {exam.exam_time || 'Time TBC'} — {exam.paper_code || 'Paper'}
+                    {exam.exam_time || 'Time TBC'} —{' '}
+                    {exam.paper_code || 'Paper'}
                   </div>
 
                   <div style={examMeta}>
-                    {exam.exam_board || 'Board'} · {exam.exam_level || 'Level'}
+                    {exam.exam_board || 'Board'} ·{' '}
+                    {exam.exam_level || 'Level'}
                   </div>
 
                   {exam.notes && <div style={examNotes}>{exam.notes}</div>}
