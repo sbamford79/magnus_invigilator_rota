@@ -606,7 +606,7 @@ const statusBox: React.CSSProperties = {
 
 const mainGrid: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'minmax(280px, 420px) 1fr',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
   gap: 18,
   marginBottom: 20,
 };

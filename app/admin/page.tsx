@@ -49,12 +49,12 @@ export default function AdminHomePage() {
           text="See today’s staffing and any gaps"
         />
 
-<DashboardCard
-  href="/admin/exam-timetable"
-  icon="📝"
-  title="Exam Timetable"
-  text="View exams, candidate numbers and upload timetable CSV files."
-/>
+        <DashboardCard
+          href="/admin/exam-timetable"
+          icon="📝"
+          title="Exam Timetable"
+          text="View exams, candidate numbers and upload timetable CSV files."
+        />
 
         <DashboardCard
           href="/admin/invigilators"

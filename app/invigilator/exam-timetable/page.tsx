@@ -88,30 +88,29 @@ export default function InvigilatorExamTimetablePage() {
   async function loadExams() {
     setStatus('Loading timetable...');
 
-    const { data: activeSeason, error: seasonError } = await supabase
-      .from('seasons')
-      .select('id')
-      .eq('status', 'active')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    const { data: activeSeasons, error: seasonError } = await supabase
+  .from('seasons')
+  .select('id')
+  .eq('status', 'active');
 
-    if (seasonError) {
-      setStatus(seasonError.message);
-      return;
-    }
+if (seasonError) {
+  setStatus(seasonError.message);
+  return;
+}
 
-    if (!activeSeason?.id) {
-      setStatus('No active season found.');
-      return;
-    }
+const activeSeasonIds = (activeSeasons ?? []).map(season => season.id);
 
-    const { data, error } = await supabase
-      .from('exam_timetable')
-      .select('*')
-      .eq('season_id', activeSeason.id)
-      .order('exam_date', { ascending: true })
-      .order('exam_time', { ascending: true });
+if (activeSeasonIds.length === 0) {
+  setStatus('No active seasons found.');
+  return;
+}
+
+const { data, error } = await supabase
+  .from('exam_timetable')
+  .select('*')
+  .in('season_id', activeSeasonIds)
+  .order('exam_date', { ascending: true })
+  .order('exam_time', { ascending: true });
 
     if (error) {
       setStatus(error.message);
@@ -362,7 +361,7 @@ const statusBox: React.CSSProperties = {
 
 const mainGrid: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'minmax(280px, 420px) 1fr',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
   gap: 18,
   marginBottom: 20,
 };

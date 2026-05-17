@@ -60,7 +60,7 @@ export default function InvigilatorHomePage() {
         />
 
 <DashboardCard
-  href="/admin/exam-timetable"
+  href="/invigilator/exam-timetable"
   icon="📝"
   title="Exam Timetable"
   text="View exams, candidate numbers and upload timetable CSV files."
