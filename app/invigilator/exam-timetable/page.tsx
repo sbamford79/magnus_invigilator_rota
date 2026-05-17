@@ -142,23 +142,23 @@ export default function InvigilatorExamTimetablePage() {
     [exams, selectedDate]
   );
 
- const amCandidates = examsForSelectedDate
-  .filter(exam => {
-    if (!exam.exam_time) return false;
+  const amCandidates = examsForSelectedDate
+    .filter(exam => {
+      if (!exam.exam_time) return false;
 
-    const hour = parseInt(exam.exam_time.split(':')[0] || '0');
-    return hour < 12;
-  })
-  .reduce((total, exam) => total + (exam.student_count ?? 0), 0);
+      const hour = parseInt(exam.exam_time.split(':')[0] || '0');
+      return hour < 12;
+    })
+    .reduce((total, exam) => total + (exam.student_count ?? 0), 0);
 
-const pmCandidates = examsForSelectedDate
-  .filter(exam => {
-    if (!exam.exam_time) return false;
+  const pmCandidates = examsForSelectedDate
+    .filter(exam => {
+      if (!exam.exam_time) return false;
 
-    const hour = parseInt(exam.exam_time.split(':')[0] || '0');
-    return hour >= 12;
-  })
-  .reduce((total, exam) => total + (exam.student_count ?? 0), 0);
+      const hour = parseInt(exam.exam_time.split(':')[0] || '0');
+      return hour >= 12;
+    })
+    .reduce((total, exam) => total + (exam.student_count ?? 0), 0);
 
   function goPrevMonth() {
     setViewDate(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
@@ -183,18 +183,6 @@ const pmCandidates = examsForSelectedDate
       </div>
 
       {status && <div style={statusBox}>{status}</div>}
-
-     <div style={infoGrid}>
-  <div style={infoCard}>
-    <span style={smallLabel}>AM Candidates</span>
-    <strong style={infoValue}>{amCandidates}</strong>
-  </div>
-
-  <div style={infoCard}>
-    <span style={smallLabel}>PM Candidates</span>
-    <strong style={infoValue}>{pmCandidates}</strong>
-  </div>
-</div> 
 
       <div style={mainGrid}>
         <section style={calendarCard}>
@@ -259,41 +247,36 @@ const pmCandidates = examsForSelectedDate
 
         <section style={summaryCard}>
           <span style={smallLabel}>Selected date</span>
+
           <h2 style={{ margin: '4px 0 10px 0', color: '#4c1d95' }}>
             {formatLongDate(selectedDate)}
           </h2>
 
-         <div style={summaryStats}>
-  <div
-    style={{
-      background: '#faf5ff',
-      border: '1px solid #ddd6fe',
-      borderRadius: 12,
-      padding: 14,
-      textAlign: 'center',
-    }}
-  >
-    <span style={smallLabel}>AM Candidates</span>
-    <strong style={infoValue}>{amCandidates}</strong>
-  </div>
+          <div style={summaryStats}>
+            <div
+              style={{
+                background: '#faf5ff',
+                border: '1px solid #ddd6fe',
+                borderRadius: 12,
+                padding: 14,
+                textAlign: 'center',
+              }}
+            >
+              <span style={smallLabel}>AM Candidates</span>
+              <strong style={infoValue}>{amCandidates}</strong>
+            </div>
 
-  <div
-    style={{
-      background: '#faf5ff',
-      border: '1px solid #ddd6fe',
-      borderRadius: 12,
-      padding: 14,
-      textAlign: 'center',
-    }}
-  >
-    <span style={smallLabel}>PM Candidates</span>
-    <strong style={infoValue}>{pmCandidates}</strong>
-  </div>
-</div>
-
-            <div>
-             <span style={smallLabel}>PM candidates</span>
-             <strong style={infoValue}>{pmCandidates}</strong>
+            <div
+              style={{
+                background: '#faf5ff',
+                border: '1px solid #ddd6fe',
+                borderRadius: 12,
+                padding: 14,
+                textAlign: 'center',
+              }}
+            >
+              <span style={smallLabel}>PM Candidates</span>
+              <strong style={infoValue}>{pmCandidates}</strong>
             </div>
           </div>
         </section>
@@ -310,11 +293,13 @@ const pmCandidates = examsForSelectedDate
               <div key={exam.id} style={examRow}>
                 <div>
                   <div style={examTitle}>
-                    {exam.exam_time || 'Time TBC'} — {exam.paper_code || 'Paper'}
+                    {exam.exam_time || 'Time TBC'} —{' '}
+                    {exam.paper_code || 'Paper'}
                   </div>
 
                   <div style={examMeta}>
-                    {exam.exam_board || 'Board'} · {exam.exam_level || 'Level'}
+                    {exam.exam_board || 'Board'} ·{' '}
+                    {exam.exam_level || 'Level'}
                   </div>
 
                   {exam.notes && <div style={examNotes}>{exam.notes}</div>}
@@ -373,34 +358,6 @@ const statusBox: React.CSSProperties = {
   borderRadius: 10,
   padding: 12,
   fontWeight: 700,
-};
-
-const infoGrid: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-  gap: 14,
-  marginBottom: 18,
-};
-
-const infoCard: React.CSSProperties = {
-  background: 'white',
-  border: '1px solid #e5e7eb',
-  borderRadius: 14,
-  padding: 16,
-  boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
-};
-
-const smallLabel: React.CSSProperties = {
-  display: 'block',
-  color: '#6b7280',
-  fontSize: 13,
-  fontWeight: 700,
-  marginBottom: 4,
-};
-
-const infoValue: React.CSSProperties = {
-  color: '#4c1d95',
-  fontSize: 18,
 };
 
 const mainGrid: React.CSSProperties = {
@@ -494,6 +451,19 @@ const summaryStats: React.CSSProperties = {
   gap: 12,
   marginTop: 14,
   alignItems: 'stretch',
+};
+
+const smallLabel: React.CSSProperties = {
+  display: 'block',
+  color: '#6b7280',
+  fontSize: 13,
+  fontWeight: 700,
+  marginBottom: 4,
+};
+
+const infoValue: React.CSSProperties = {
+  color: '#4c1d95',
+  fontSize: 18,
 };
 
 const examListCard: React.CSSProperties = {
