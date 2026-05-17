@@ -585,6 +585,65 @@ console.log('Raw date:', rawDate);
   }
 }
 
+async function calculateRoomRequirements() {
+  if (!currentSeason?.id) return;
+
+  try {
+    setStatus('Calculating session requirements...');
+
+    const { data: rooms, error } = await supabase
+      .from('room_requirements')
+      .select('*')
+      .eq('season_id', currentSeason.id);
+
+    if (error) {
+      setStatus(error.message);
+      return;
+    }
+
+    if (!rooms || rooms.length === 0) {
+      setStatus('No room requirements uploaded.');
+      return;
+    }
+
+    const grouped = new Map<string, number>();
+
+    for (const room of rooms) {
+      const key = `${room.exam_date}_${room.session_key}`;
+
+      const current = grouped.get(key) ?? 0;
+
+      grouped.set(
+        key,
+        current + (room.suggested_invigilators ?? 0)
+      );
+    }
+
+    for (const [key, total] of grouped.entries()) {
+      const [examDate, sessionKey] = key.split('_');
+
+      const day = days.find(d => d.date === examDate);
+
+      if (!day) continue;
+
+      await updateSession(day.id, sessionKey as SessionKey, {
+        enabled: true,
+        needed: total,
+      });
+    }
+
+    await loadDays();
+
+    setStatus('Session requirements calculated.');
+  } catch (error) {
+    setStatus(
+      error instanceof Error
+        ? error.message
+        : 'Calculation failed'
+    );
+  }
+}
+
   async function removeDay(id: string) {
     try {
       setStatus('Removing...');
@@ -653,6 +712,17 @@ console.log('Raw date:', rawDate);
     onChange={uploadRoomRequirements}
     disabled={uploadingRooms}
   />
+
+<div style={{ marginTop: 14 }}>
+  <button
+    onClick={calculateRoomRequirements}
+    style={primaryButton}
+    disabled={uploadingRooms}
+  >
+    Calculate session requirements
+  </button>
+</div>
+
 </section>
 
 <div style={infoGrid}>
