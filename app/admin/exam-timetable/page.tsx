@@ -356,11 +356,6 @@ const pmCandidates = examsForSelectedDate
           <span style={smallLabel}>Current season</span>
           <strong style={infoValue}>{currentSeason.name}</strong>
         </div>
-
-        <div style={infoCard}>
-          <span style={smallLabel}>Timetable rows</span>
-          <strong style={infoValue}>{exams.length}</strong>
-        </div>
       </div>
 
       <section style={uploadCard}>
@@ -451,19 +446,33 @@ const pmCandidates = examsForSelectedDate
             {formatLongDate(selectedDate)}
           </h2>
 
-          <div style={summaryStats}>
-           <div>
-             <span style={smallLabel}>AM Candidates</span>
-             <strong style={infoValue}>{amCandidates}</strong>
-          </div>
+       <div style={summaryStats}>
+  <div
+    style={{
+      background: '#faf5ff',
+      border: '1px solid #ddd6fe',
+      borderRadius: 12,
+      padding: 14,
+      textAlign: 'center',
+    }}
+  >
+    <span style={smallLabel}>AM Candidates</span>
+    <strong style={infoValue}>{amCandidates}</strong>
+  </div>
 
-           <div>
-             <span style={smallLabel}>PM Candidates</span>
-             <strong style={infoValue}>{pmCandidates}</strong>
-           </div>
-         </div>
-        </section>
-      </div>
+  <div
+    style={{
+      background: '#faf5ff',
+      border: '1px solid #ddd6fe',
+      borderRadius: 12,
+      padding: 14,
+      textAlign: 'center',
+    }}
+  >
+    <span style={smallLabel}>PM Candidates</span>
+    <strong style={infoValue}>{pmCandidates}</strong>
+  </div>
+</div>
 
       <section style={examListCard}>
         <h2 style={sectionTitle}>Exams on selected date</h2>
@@ -672,9 +681,10 @@ const summaryCard: React.CSSProperties = {
 
 const summaryStats: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
   gap: 12,
   marginTop: 14,
+  alignItems: 'stretch',
 };
 
 const examListCard: React.CSSProperties = {

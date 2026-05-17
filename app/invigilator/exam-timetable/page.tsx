@@ -186,11 +186,6 @@ const pmCandidates = examsForSelectedDate
 
      <div style={infoGrid}>
   <div style={infoCard}>
-    <span style={smallLabel}>Timetable rows</span>
-    <strong style={infoValue}>{exams.length}</strong>
-  </div>
-
-  <div style={infoCard}>
     <span style={smallLabel}>AM Candidates</span>
     <strong style={infoValue}>{amCandidates}</strong>
   </div>
@@ -268,16 +263,33 @@ const pmCandidates = examsForSelectedDate
             {formatLongDate(selectedDate)}
           </h2>
 
-          <div style={summaryStats}>
-            <div>
-              <span style={smallLabel}>Exams</span>
-              <strong style={infoValue}>{examsForSelectedDate.length}</strong>
-            </div>
+         <div style={summaryStats}>
+  <div
+    style={{
+      background: '#faf5ff',
+      border: '1px solid #ddd6fe',
+      borderRadius: 12,
+      padding: 14,
+      textAlign: 'center',
+    }}
+  >
+    <span style={smallLabel}>AM Candidates</span>
+    <strong style={infoValue}>{amCandidates}</strong>
+  </div>
 
-            <div>
-              <span style={smallLabel}>AM Candidates</span>
-              <strong style={infoValue}>{amCandidates}</strong>
-            </div>
+  <div
+    style={{
+      background: '#faf5ff',
+      border: '1px solid #ddd6fe',
+      borderRadius: 12,
+      padding: 14,
+      textAlign: 'center',
+    }}
+  >
+    <span style={smallLabel}>PM Candidates</span>
+    <strong style={infoValue}>{pmCandidates}</strong>
+  </div>
+</div>
 
             <div>
              <span style={smallLabel}>PM candidates</span>
@@ -478,9 +490,10 @@ const summaryCard: React.CSSProperties = {
 
 const summaryStats: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
   gap: 12,
   marginTop: 14,
+  alignItems: 'stretch',
 };
 
 const examListCard: React.CSSProperties = {
