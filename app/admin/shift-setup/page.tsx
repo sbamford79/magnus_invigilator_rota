@@ -112,6 +112,7 @@ export default function ShiftSetupPage() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState('');
   const [lastPublishedAt, setLastPublishedAt] = useState<string | null>(null);
+  const [uploadingRooms, setUploadingRooms] = useState(false);
 
   useEffect(() => {
     if (currentSeason?.id) {
@@ -476,6 +477,109 @@ export default function ShiftSetupPage() {
     }
   }
 
+async function uploadRoomRequirements(
+  event: React.ChangeEvent<HTMLInputElement>
+) {
+  if (!currentSeason?.id) return;
+
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  try {
+    setUploadingRooms(true);
+    setStatus('Uploading room requirements...');
+
+    const text = await file.text();
+
+    const rows = text
+      .split('\n')
+      .map(r => r.trim())
+      .filter(Boolean);
+
+    if (rows.length < 2) {
+      setStatus('CSV is empty.');
+      return;
+    }
+
+    const headers = rows[0].split(',');
+
+    const dataRows = rows.slice(1);
+
+    function get(row: string[], name: string) {
+      const index = headers.indexOf(name);
+      return index >= 0 ? row[index]?.replace(/"/g, '') ?? '' : '';
+    }
+
+    await supabase
+      .from('room_requirements')
+      .delete()
+      .eq('season_id', currentSeason.id);
+
+    const inserts = [];
+
+    for (const rowText of dataRows) {
+      const row = rowText.split(',');
+
+      const rawDate = get(row, 'Date');
+
+      if (!rawDate) continue;
+
+      const [day, month, year] = rawDate.split('/');
+
+      const examDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+
+      const start = get(row, 'Start');
+
+      let sessionKey: SessionKey = 'morning';
+
+      const hour = parseInt(start.split(':')[0] || '0');
+
+      if (hour >= 13) {
+        sessionKey = 'afternoon';
+      } else if (hour >= 11) {
+        sessionKey = 'mid';
+      }
+
+      const studentCount = Number(get(row, 'NoOfCands') || '0');
+
+      const suggestedInvigilators =
+        studentCount <= 1
+          ? 1
+          : Math.ceil(studentCount / 30) + 1;
+
+      inserts.push({
+        season_id: currentSeason.id,
+        exam_date: examDate,
+        session_key: sessionKey,
+        start_time: start,
+        room_name: get(row, 'Room'),
+        exam_name: get(row, 'ComponentLocalName'),
+        paper_code: get(row, 'ComponentCode'),
+        student_count: studentCount,
+        duration_minutes: Number(get(row, 'Length') || '0'),
+        suggested_invigilators: suggestedInvigilators,
+      });
+    }
+
+    const { error } = await supabase
+      .from('room_requirements')
+      .insert(inserts);
+
+    if (error) {
+      setStatus(error.message);
+      return;
+    }
+
+    setStatus(`Uploaded ${inserts.length} room requirements.`);
+  } catch (error) {
+    setStatus(
+      error instanceof Error ? error.message : 'Upload failed'
+    );
+  } finally {
+    setUploadingRooms(false);
+  }
+}
+
   async function removeDay(id: string) {
     try {
       setStatus('Removing...');
@@ -500,14 +604,53 @@ export default function ShiftSetupPage() {
   return (
     <div style={page}>
       <div style={hero}>
-        <h1 style={heroTitle}>Shift Setup</h1>
-        <p style={heroText}>
-          Create exam days, choose which sessions are running, and set how many
-          invigilators are needed.
-        </p>
-      </div>
+  <h1 style={heroTitle}>Shift Setup</h1>
+  <p style={heroText}>
+    Create exam days, choose which sessions are running, and set how many
+    invigilators are needed.
+  </p>
+</div>
 
-      <div style={infoGrid}>
+<section
+  style={{
+    background: 'white',
+    border: '1px solid #e5e7eb',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 20,
+    boxShadow: '0 4px 14px rgba(0,0,0,0.06)',
+  }}
+>
+  <h2
+    style={{
+      marginTop: 0,
+      marginBottom: 8,
+      color: '#4c1d95',
+    }}
+  >
+    Upload Room Requirements CSV
+  </h2>
+
+  <p
+    style={{
+      marginTop: 0,
+      color: '#6b7280',
+      marginBottom: 14,
+    }}
+  >
+    Upload your MIS room timetable file to automatically calculate
+    suggested invigilator numbers for each session.
+  </p>
+
+  <input
+    type="file"
+    accept=".csv,text/csv"
+    onChange={uploadRoomRequirements}
+    disabled={uploadingRooms}
+  />
+</section>
+
+<div style={infoGrid}>
         <div style={infoCard}>
           <span style={smallLabel}>Current season</span>
           <strong style={infoValue}>{currentSeason.name}</strong>
