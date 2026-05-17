@@ -619,7 +619,7 @@ async function calculateRoomRequirements() {
       );
     }
 
-    for (const [key, total] of grouped.entries()) {
+    for (const [key, total] of Array.from(grouped.entries())) {
       const [examDate, sessionKey] = key.split('_');
 
       const day = days.find(d => d.date === examDate);
