@@ -492,16 +492,17 @@ async function uploadRoomRequirements(
     const text = await file.text();
 
     const rows = text
-      .split('\n')
-      .map(r => r.trim())
-      .filter(Boolean);
+  .replace(/^\uFEFF/, '')
+  .split(/\r?\n/)
+  .map(r => r.trim())
+  .filter(Boolean);
 
     if (rows.length < 2) {
       setStatus('CSV is empty.');
       return;
     }
 
-    const headers = rows[0].split(',');
+    const headers = rows[0].split(',').map(header => header.replace(/"/g, '').trim());
 
     const dataRows = rows.slice(1);
 
@@ -518,9 +519,11 @@ async function uploadRoomRequirements(
     const inserts = [];
 
     for (const rowText of dataRows) {
-      const row = rowText.split(',');
+      const row = rowText.split(',').map(cell => cell.replace(/"/g, '').trim());
 
       const rawDate = get(row, 'Date');
+console.log('Room CSV row:', row);
+console.log('Raw date:', rawDate);
 
       const cleanDate = rawDate.split(' ')[0];
 
@@ -558,7 +561,7 @@ async function uploadRoomRequirements(
         exam_name: get(row, 'ComponentLocalName'),
         paper_code: get(row, 'ComponentCode'),
         student_count: studentCount,
-        duration_minutes: Number(get(row, 'Length') || '0'),
+        duration_minutes: Number(get(row, 'Length') || get(row, 'Length1') || '0'),
         suggested_invigilators: suggestedInvigilators,
       });
     }
