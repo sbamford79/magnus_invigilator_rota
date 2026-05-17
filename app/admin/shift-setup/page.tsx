@@ -522,9 +522,11 @@ async function uploadRoomRequirements(
 
       const rawDate = get(row, 'Date');
 
+      const cleanDate = rawDate.split(' ')[0];
+
       if (!rawDate) continue;
 
-      const [day, month, year] = rawDate.split('/');
+      const [day, month, year] = cleanDate.split('/');
 
       const examDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
 
