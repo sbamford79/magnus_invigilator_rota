@@ -606,20 +606,46 @@ async function calculateRoomRequirements() {
       return;
     }
 
-    const grouped = new Map<string, number>();
+    const roomGroups = new Map<string, number>();
 
     for (const room of rooms) {
-      const key = `${room.exam_date}_${room.session_key}`;
+      const key = [
+        room.exam_date,
+        room.session_key,
+        room.start_time,
+        room.room_name,
+      ].join('__');
 
-      const current = grouped.get(key) ?? 0;
+      const current = roomGroups.get(key) ?? 0;
 
-      grouped.set(
+      roomGroups.set(
         key,
-        current + (room.suggested_invigilators ?? 0)
+        current + (room.student_count ?? 0)
       );
     }
 
-    for (const [key, total] of Array.from(grouped.entries())) {
+    const sessionTotals = new Map<string, number>();
+
+    for (const [roomKey, studentTotal] of Array.from(roomGroups.entries())) {
+      const [examDate, sessionKey] = roomKey.split('__');
+
+      const invigilatorsNeeded =
+        studentTotal <= 1
+          ? 1
+          : Math.ceil(studentTotal / 30) + 1;
+
+      const sessionKeyName = `${examDate}_${sessionKey}`;
+
+      const current =
+        sessionTotals.get(sessionKeyName) ?? 0;
+
+      sessionTotals.set(
+        sessionKeyName,
+        current + invigilatorsNeeded
+      );
+    }
+
+    for (const [key, total] of Array.from(sessionTotals.entries())) {
       const [examDate, sessionKey] = key.split('_');
 
       const day = days.find(d => d.date === examDate);
