@@ -330,8 +330,10 @@ export default function AvailableShiftsPage() {
 
               <div style={{ display: 'grid', gap: 16 }}>
                 {group.shifts.filter(shift => {
-                const date = new Date(shift.date);
-                return date>= today; // only future or today
+                const shiftDate = new Date(shift.date);
+                shiftDate.setHours(0, 0, 0, 0);
+
+                return shiftDate>= today; // only future or today
                })
                .map(shift=> (
                   <div
