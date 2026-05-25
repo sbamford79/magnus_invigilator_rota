@@ -329,7 +329,11 @@ export default function AvailableShiftsPage() {
               </div>
 
               <div style={{ display: 'grid', gap: 16 }}>
-                {group.shifts.map(shift => (
+                {group.shifts.filter(shift => {
+                const date = new Date(shift.date);
+                return date>= today;
+               })
+               .map(shift=> (
                   <div
                     key={shift.shiftSlotId}
                     style={{
