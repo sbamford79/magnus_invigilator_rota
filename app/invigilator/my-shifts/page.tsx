@@ -21,6 +21,7 @@ type MyShift = {
   label: string;
   session: SessionKey;
   attended: boolean;
+  isActiveSeason: boolean;
 };
 
 type ShiftGroup = {
@@ -136,6 +137,20 @@ export default function MyShiftsPage() {
       return;
     }
 
+    const { data: activeSeasonRows, error: seasonError } = await supabase
+      .from('seasons')
+      .select('id')
+      .eq('status', 'active');
+
+    if (seasonError) {
+      setStatus(seasonError.message);
+      return;
+    }
+
+    const activeSeasonIds = new Set(
+      (activeSeasonRows ?? []).map(season => season.id)
+    );
+
     const { data, error } = await supabase
       .from('shift_assignments')
       .select(`
@@ -168,8 +183,11 @@ export default function MyShiftsPage() {
         date: row.shift_slots?.exam_days?.exam_date,
         label: row.shift_slots?.exam_days?.label,
         attended: row.attended === true,
+        isActiveSeason: activeSeasonIds.has(
+          row.shift_slots?.exam_days?.season_id
+        ),
       }))
-      .filter(shift => shift.date)
+      .filter(shift => shift.date && shift.seasonId)
       .sort((a, b) => {
         if (a.date !== b.date) return a.date.localeCompare(b.date);
         return (sessionOrder[a.session] ?? 99) - (sessionOrder[b.session] ?? 99);
@@ -255,7 +273,9 @@ export default function MyShiftsPage() {
   const groupedShifts = useMemo(() => {
     const groups = new Map<string, ShiftGroup>();
 
-    for (const shift of shifts.filter(shift => isTodayOrFuture(shift.date))) {
+    for (const shift of shifts.filter(
+      shift => shift.isActiveSeason && isTodayOrFuture(shift.date)
+    )) {
       if (!groups.has(shift.date)) {
         groups.set(shift.date, {
           date: shift.date,

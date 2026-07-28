@@ -120,6 +120,32 @@ export default function AdminLayout({
     await loadSeasons();
   }
 
+  async function unarchiveCurrentSeason() {
+    if (!currentSeason || currentSeason.status !== 'archived') return;
+
+    const confirmed = window.confirm(
+      `Unarchive season "${currentSeason.name}"?\n\nThis will restore it to the active season list with all of its existing data.`
+    );
+
+    if (!confirmed) return;
+
+    const { error } = await supabase
+      .from('seasons')
+      .update({ status: 'active' })
+      .eq('id', currentSeason.id);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('selectedSeasonId', currentSeason.id);
+    }
+
+    await loadSeasons();
+  }
+
   const navItems = [
     { href: '/admin', label: 'Dashboard' },
     { href: '/admin/shift-setup', label: 'Shift Setup' },
@@ -219,6 +245,23 @@ export default function AdminLayout({
                     }}
                   >
                     Archive season
+                  </button>
+                )}
+
+                {currentSeason?.status === 'archived' && (
+                  <button
+                    onClick={unarchiveCurrentSeason}
+                    style={{
+                      background: 'white',
+                      color: '#4c1d95',
+                      border: 'none',
+                      padding: '5px 8px',
+                      borderRadius: 6,
+                      cursor: 'pointer',
+                      fontWeight: 700,
+                    }}
+                  >
+                    Unarchive season
                   </button>
                 )}
 
