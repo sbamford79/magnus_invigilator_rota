@@ -27,6 +27,7 @@ type ShiftSlot = {
 type Assignment = {
   shift_slot_id: string;
   invigilator_id: string;
+  attended: boolean;
 };
 
 type Application = {
@@ -88,6 +89,21 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState('');
   const [ratioSort, setRatioSort] = useState<'lowest' | 'highest' | 'name'>('lowest');
+  const [openReports, setOpenReports] = useState({
+    rota: true,
+    attendance: false,
+    ratio: false,
+  });
+
+  function setReportOpen(
+    report: keyof typeof openReports,
+    value: string
+  ) {
+    setOpenReports(current => ({
+      ...current,
+      [report]: value === 'open',
+    }));
+  }
 
   useEffect(() => {
     if (currentSeason?.id) {
@@ -151,7 +167,7 @@ export default function ReportsPage() {
       if (slotIds.length > 0) {
         const { data: fetchedAssignments, error: assignmentError } = await supabase
           .from('shift_assignments')
-          .select('shift_slot_id, invigilator_id')
+          .select('shift_slot_id, invigilator_id, attended')
           .in('shift_slot_id', slotIds)
           .eq('published', true);
 
@@ -218,12 +234,47 @@ export default function ReportsPage() {
     return lookup;
   }, [assignments, slotLookup, dayLookup]);
 
+  const attendanceLookup = useMemo(() => {
+    const lookup = new Map<string, boolean>();
+
+    for (const assignment of assignments) {
+      const slot = slotLookup.get(assignment.shift_slot_id);
+      if (!slot) continue;
+
+      const day = dayLookup.get(slot.exam_day_id);
+      if (!day) continue;
+
+      lookup.set(
+        `${assignment.invigilator_id}__${day.exam_date}__${slot.session_key}`,
+        assignment.attended === true
+      );
+    }
+
+    return lookup;
+  }, [assignments, slotLookup, dayLookup]);
+
   function hasAssignment(invigilatorId: string, date: string, session: SessionKey) {
     return assignmentLookup.has(`${invigilatorId}__${date}__${session}`);
   }
 
+  function getAttendance(
+    invigilatorId: string,
+    date: string,
+    session: SessionKey
+  ) {
+    return attendanceLookup.get(`${invigilatorId}__${date}__${session}`);
+  }
+
   function getAssignedTotal(invigilatorId: string) {
     return assignments.filter(a => a.invigilator_id === invigilatorId).length;
+  }
+
+  function getAttendedTotal(invigilatorId: string) {
+    return assignments.filter(
+      assignment =>
+        assignment.invigilator_id === invigilatorId &&
+        assignment.attended === true
+    ).length;
   }
 
   const ratioRows = useMemo(() => {
@@ -328,6 +379,56 @@ export default function ReportsPage() {
     );
   }
 
+  function exportAttendanceGridToExcel() {
+    const headers = [
+      'Invigilator',
+      ...days.map(day => formatDateForHeader(day.exam_date)),
+      'Attended',
+      'Assigned',
+    ];
+
+    const rows = invigilators.map(invigilator => {
+      const dateCells = days.map(day => {
+        const parts: string[] = [];
+
+        (['morning', 'mid', 'afternoon'] as SessionKey[]).forEach(session => {
+          const attendance = getAttendance(
+            invigilator.id,
+            day.exam_date,
+            session
+          );
+          if (attendance === undefined) return;
+
+          const label =
+            session === 'morning'
+              ? 'Morning'
+              : session === 'mid'
+              ? 'Mid'
+              : 'Afternoon';
+          parts.push(`${label}: ${attendance ? 'Attended' : 'Not marked'}`);
+        });
+
+        return parts.join(', ');
+      });
+
+      return [
+        invigilator.full_name,
+        ...dateCells,
+        getAttendedTotal(invigilator.id),
+        getAssignedTotal(invigilator.id),
+      ];
+    });
+
+    const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    const workbook = XLSX.utils.book_new();
+
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Attendance Grid');
+    XLSX.writeFile(
+      workbook,
+      `${currentSeason?.name ?? 'season'}-attendance-grid.xlsx`
+    );
+  }
+
   if (!currentSeason) {
     return <div>No season selected.</div>;
   }
@@ -369,13 +470,28 @@ export default function ReportsPage() {
             flexWrap: 'wrap',
           }}
         >
-          <h2 style={{ margin: 0 }}>Rota Grid</h2>
+          <div style={reportTitleRow}>
+            <h2 style={{ margin: 0 }}>Rota Grid</h2>
+            <select
+              aria-label="Rota Grid display"
+              value={openReports.rota ? 'open' : 'closed'}
+              onChange={event => setReportOpen('rota', event.target.value)}
+              style={reportDisplaySelect}
+            >
+              <option value="open">Show report</option>
+              <option value="closed">Hide report</option>
+            </select>
+          </div>
 
-          <button onClick={exportRotaGridToExcel}>
-            Export Rota Grid to Excel
-          </button>
+          {openReports.rota && (
+            <button onClick={exportRotaGridToExcel}>
+              Export Rota Grid to Excel
+            </button>
+          )}
         </div>
 
+        {openReports.rota && (
+          <>
         <div
           style={{
             marginBottom: 16,
@@ -542,6 +658,144 @@ export default function ReportsPage() {
             </table>
           </div>
         )}
+          </>
+        )}
+      </section>
+
+      <section style={{ marginBottom: 36 }}>
+        <div style={reportHeader}>
+          <div style={reportTitleRow}>
+            <h2 style={{ margin: 0 }}>Attendance Grid</h2>
+            <select
+              aria-label="Attendance Grid display"
+              value={openReports.attendance ? 'open' : 'closed'}
+              onChange={event =>
+                setReportOpen('attendance', event.target.value)
+              }
+              style={reportDisplaySelect}
+            >
+              <option value="open">Show report</option>
+              <option value="closed">Hide report</option>
+            </select>
+          </div>
+
+          {openReports.attendance && (
+            <button onClick={exportAttendanceGridToExcel}>
+              Export Attendance Grid to Excel
+            </button>
+          )}
+        </div>
+
+        {openReports.attendance && (
+          <>
+            <div
+              style={{
+                marginBottom: 16,
+                display: 'flex',
+                gap: 18,
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                padding: 12,
+                background: '#f7f7f7',
+                borderRadius: 8,
+              }}
+            >
+              <strong>Legend:</strong>
+              <span style={attendanceLegendItem}>
+                <span style={attendedMark}>✓</span> Attended
+              </span>
+              <span style={attendanceLegendItem}>
+                <span style={notMarkedMark}>—</span> Assigned, not marked
+              </span>
+            </div>
+
+            {invigilators.length === 0 ? (
+              <p>No invigilators found.</p>
+            ) : days.length === 0 ? (
+              <p>No exam days found for this season.</p>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={gridTable}>
+                  <thead>
+                    <tr>
+                      <th style={stickyNameHeader}>Invigilator</th>
+                      {days.map(day => (
+                        <th key={day.id} style={dateHeader}>
+                          {formatDateForHeader(day.exam_date)}
+                        </th>
+                      ))}
+                      <th style={totalHeader}>Attended</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invigilators.map(invigilator => (
+                      <tr key={invigilator.id}>
+                        <td
+                          style={stickyNameCell}
+                          title={invigilator.full_name}
+                        >
+                          {invigilator.full_name}
+                        </td>
+
+                        {days.map(day => (
+                          <td
+                            key={`${invigilator.id}-${day.id}`}
+                            style={attendanceCell}
+                          >
+                            <div style={attendanceSessionList}>
+                              {(
+                                ['morning', 'mid', 'afternoon'] as SessionKey[]
+                              ).map(session => {
+                                const attendance = getAttendance(
+                                  invigilator.id,
+                                  day.exam_date,
+                                  session
+                                );
+                                if (attendance === undefined) return null;
+
+                                return (
+                                  <span
+                                    key={session}
+                                    title={
+                                      session.charAt(0).toUpperCase() +
+                                      session.slice(1)
+                                    }
+                                    style={{
+                                      ...attendanceBadge,
+                                      background: attendance
+                                        ? '#dcfce7'
+                                        : '#f3f4f6',
+                                      color: attendance
+                                        ? '#166534'
+                                        : '#4b5563',
+                                      borderLeft: `4px solid ${sessionColours[session]}`,
+                                    }}
+                                  >
+                                    {session === 'morning'
+                                      ? 'M'
+                                      : session === 'mid'
+                                      ? 'Mid'
+                                      : 'A'}{' '}
+                                    {attendance ? '✓' : '—'}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          </td>
+                        ))}
+
+                        <td style={attendanceTotalCell}>
+                          {getAttendedTotal(invigilator.id)}/
+                          {getAssignedTotal(invigilator.id)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
       </section>
 
       <section>
@@ -555,8 +809,20 @@ export default function ReportsPage() {
             flexWrap: 'wrap',
           }}
         >
-          <h2 style={{ margin: 0 }}>Invigilator Ratio Report</h2>
+          <div style={reportTitleRow}>
+            <h2 style={{ margin: 0 }}>Invigilator Ratio Report</h2>
+            <select
+              aria-label="Invigilator Ratio Report display"
+              value={openReports.ratio ? 'open' : 'closed'}
+              onChange={event => setReportOpen('ratio', event.target.value)}
+              style={reportDisplaySelect}
+            >
+              <option value="open">Show report</option>
+              <option value="closed">Hide report</option>
+            </select>
+          </div>
 
+          {openReports.ratio && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <label htmlFor="ratio-sort" style={{ fontWeight: 600 }}>
               Order by:
@@ -577,8 +843,11 @@ export default function ReportsPage() {
               Export Ratio Report to Excel
             </button>
           </div>
+          )}
         </div>
 
+        {openReports.ratio && (
+          <>
         <div style={{ overflowX: 'auto' }}>
           <table
             style={{
@@ -612,6 +881,8 @@ export default function ReportsPage() {
         <p style={{ marginTop: 12, color: '#555' }}>
           Invigilators with 0 applications are included so you can spot who has not applied at all.
         </p>
+          </>
+        )}
       </section>
     </div>
   );
@@ -634,4 +905,135 @@ const tdStyleNumber: React.CSSProperties = {
   border: '1px solid #ddd',
   padding: 12,
   textAlign: 'right',
+};
+
+const reportHeader: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  marginBottom: 12,
+  gap: 12,
+  flexWrap: 'wrap',
+};
+
+const reportTitleRow: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  flexWrap: 'wrap',
+};
+
+const reportDisplaySelect: React.CSSProperties = {
+  border: '1px solid #c4b5fd',
+  borderRadius: 8,
+  padding: '6px 9px',
+  background: '#f5f3ff',
+  color: '#4c1d95',
+  fontWeight: 700,
+  cursor: 'pointer',
+};
+
+const gridTable: React.CSSProperties = {
+  borderCollapse: 'collapse',
+  minWidth: 900,
+  width: '100%',
+  background: '#fff',
+};
+
+const stickyNameHeader: React.CSSProperties = {
+  position: 'sticky',
+  left: 0,
+  background: '#fff',
+  zIndex: 2,
+  border: '1px solid #ddd',
+  padding: 10,
+  textAlign: 'left',
+  minWidth: 150,
+  width: 150,
+  whiteSpace: 'nowrap',
+};
+
+const stickyNameCell: React.CSSProperties = {
+  position: 'sticky',
+  left: 0,
+  background: '#fff',
+  zIndex: 1,
+  border: '1px solid #ddd',
+  padding: 10,
+  fontWeight: 600,
+  minWidth: 150,
+  maxWidth: 150,
+  width: 150,
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+};
+
+const dateHeader: React.CSSProperties = {
+  border: '1px solid #ddd',
+  padding: 12,
+  textAlign: 'center',
+  minWidth: 120,
+};
+
+const totalHeader: React.CSSProperties = {
+  border: '1px solid #ddd',
+  padding: 12,
+  textAlign: 'center',
+  minWidth: 90,
+  background: '#f7f7f7',
+};
+
+const attendanceCell: React.CSSProperties = {
+  border: '1px solid #ddd',
+  padding: 8,
+  textAlign: 'center',
+  verticalAlign: 'middle',
+  height: 52,
+};
+
+const attendanceSessionList: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'center',
+  alignItems: 'center',
+  gap: 5,
+  flexWrap: 'wrap',
+  minHeight: 24,
+};
+
+const attendanceBadge: React.CSSProperties = {
+  borderRadius: 6,
+  padding: '4px 6px',
+  fontSize: 11,
+  fontWeight: 800,
+};
+
+const attendanceTotalCell: React.CSSProperties = {
+  border: '1px solid #ddd',
+  padding: 12,
+  textAlign: 'center',
+  fontWeight: 700,
+  background: '#fafafa',
+};
+
+const attendanceLegendItem: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 7,
+};
+
+const attendedMark: React.CSSProperties = {
+  color: '#166534',
+  background: '#dcfce7',
+  borderRadius: 6,
+  padding: '2px 6px',
+  fontWeight: 900,
+};
+
+const notMarkedMark: React.CSSProperties = {
+  color: '#4b5563',
+  background: '#e5e7eb',
+  borderRadius: 6,
+  padding: '2px 6px',
+  fontWeight: 900,
 };

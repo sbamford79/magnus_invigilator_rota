@@ -4,11 +4,54 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { supabase } from '../../lib/supabase';
 
+type Notice = {
+  id: string;
+  title: string;
+  content: string;
+  position: number;
+};
+
+type ShiftNotification = {
+  id: string;
+  notification_type: 'shifts_available' | 'assignments_published';
+  title: string;
+  message: string;
+  created_at: string;
+};
+
+const defaultNotices: Notice[] = [
+  {
+    id: 'mock-exams',
+    title: 'Mock Exams: Last Updated 6/5/26',
+    content:
+      'During the Y10 mock exam seasons there will be 2 sessions in a day. The exams will begin at 8:45am and 1:00pm. Please arrive 30 minutes before these start times.',
+    position: 1,
+  },
+  {
+    id: 'summer-exams',
+    title: 'Summer Exams: Last Updated 6/5/26',
+    content:
+      'During the summer exam season there will be 2 sessions in a day. The exams will begin at 9:00am and 1:00pm. Please arrive 30 minutes before these start times.',
+    position: 2,
+  },
+  {
+    id: 'general-information',
+    title: 'General Information',
+    content: 'Please check this area for important updates from the exams team.',
+    position: 3,
+  },
+];
+
 export default function InvigilatorHomePage() {
   const [name, setName] = useState('');
+  const [notices, setNotices] = useState<Notice[]>(defaultNotices);
+  const [shiftNotifications, setShiftNotifications] = useState<
+    ShiftNotification[]
+  >([]);
 
   useEffect(() => {
     loadInvigilator();
+    loadNotices();
   }, []);
 
   async function loadInvigilator() {
@@ -18,12 +61,47 @@ export default function InvigilatorHomePage() {
 
     const { data } = await supabase
       .from('invigilators')
-      .select('full_name')
+      .select('id, full_name')
       .eq('auth_user_id', authData.user.id)
       .single();
 
     if (data?.full_name) {
       setName(data.full_name);
+    }
+
+    const { data: notificationRows } = await supabase
+      .from('invigilator_shift_notifications')
+      .select('id, notification_type, title, message, created_at')
+      .eq('invigilator_id', data?.id)
+      .is('read_at', null)
+      .order('created_at', { ascending: false });
+
+    setShiftNotifications(
+      (notificationRows ?? []) as ShiftNotification[]
+    );
+  }
+
+  async function markShiftNotificationRead(notificationId: string) {
+    const { error } = await supabase
+      .from('invigilator_shift_notifications')
+      .update({ read_at: new Date().toISOString() })
+      .eq('id', notificationId);
+
+    if (!error) {
+      setShiftNotifications(current =>
+        current.filter(notification => notification.id !== notificationId)
+      );
+    }
+  }
+
+  async function loadNotices() {
+    const { data, error } = await supabase
+      .from('invigilator_notices')
+      .select('id, title, content, position')
+      .order('position', { ascending: true });
+
+    if (!error && data?.length) {
+      setNotices(data as Notice[]);
     }
   }
 
@@ -36,6 +114,144 @@ export default function InvigilatorHomePage() {
           below to manage your shifts and view your schedule.
         </p>
       </div>
+
+      <section
+          aria-label="New shift notifications"
+          style={{
+            background: shiftNotifications.length > 0 ? '#fffbeb' : 'white',
+            border:
+              shiftNotifications.length > 0
+                ? '2px solid #fbbf24'
+                : '1px solid #e5e7eb',
+            borderRadius: 16,
+            padding: 20,
+            marginBottom: 24,
+            boxShadow: '0 4px 14px rgba(0,0,0,0.06)',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: 10,
+              marginBottom: 12,
+              flexWrap: 'wrap',
+            }}
+          >
+            <h2
+              style={{
+                margin: 0,
+                color: shiftNotifications.length > 0 ? '#92400e' : '#4c1d95',
+              }}
+            >
+              Shift notifications
+            </h2>
+            <span
+              style={{
+                background:
+                  shiftNotifications.length > 0 ? '#f59e0b' : '#dcfce7',
+                color: shiftNotifications.length > 0 ? 'white' : '#166534',
+                borderRadius: 999,
+                padding: '5px 9px',
+                fontSize: 12,
+                fontWeight: 800,
+              }}
+            >
+              {shiftNotifications.length > 0
+                ? `${shiftNotifications.length} unread`
+                : 'Up to date'}
+            </span>
+          </div>
+
+          {shiftNotifications.length === 0 ? (
+            <div
+              style={{
+                background: '#f9fafb',
+                borderRadius: 12,
+                padding: 14,
+                color: '#6b7280',
+              }}
+            >
+              You have no new shift updates. New available shifts and newly
+              assigned shifts will appear here.
+            </div>
+          ) : (
+          <div style={{ display: 'grid', gap: 10 }}>
+            {shiftNotifications.map(notification => (
+              <div
+                key={notification.id}
+                style={{
+                  background: 'white',
+                  border: '1px solid #fde68a',
+                  borderRadius: 12,
+                  padding: 14,
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: 14,
+                  flexWrap: 'wrap',
+                }}
+              >
+                <div style={{ flex: '1 1 280px' }}>
+                  <strong style={{ color: '#4c1d95', fontSize: 16 }}>
+                    {notification.title}
+                  </strong>
+                  <p style={{ margin: '5px 0', color: '#374151' }}>
+                    {notification.message}
+                  </p>
+                  <div style={{ color: '#6b7280', fontSize: 12 }}>
+                    {new Date(notification.created_at).toLocaleString('en-GB')}
+                  </div>
+                  <Link
+                    href={
+                      notification.notification_type === 'shifts_available'
+                        ? '/invigilator/available-shifts'
+                        : '/invigilator/my-shifts'
+                    }
+                    style={{
+                      display: 'inline-block',
+                      marginTop: 8,
+                      color: '#4c1d95',
+                      fontWeight: 700,
+                    }}
+                  >
+                    View shifts
+                  </Link>
+                </div>
+
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    fontWeight: 700,
+                    color: '#374151',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    onChange={() =>
+                      markShiftNotificationRead(notification.id)
+                    }
+                  />
+                  I’ve read this
+                </label>
+              </div>
+            ))}
+          </div>
+          )}
+        </section>
+
+      <section aria-label="Important information" style={infoGrid}>
+        {notices.map(notice => (
+          <div key={notice.id} style={infoCard}>
+            <h2 style={sectionTitle}>{notice.title}</h2>
+            <p style={sectionText}>{notice.content}</p>
+          </div>
+        ))}
+      </section>
 
       <div style={cardGrid}>
         <DashboardCard
@@ -74,25 +290,6 @@ export default function InvigilatorHomePage() {
         />
       </div>
 
-      <div style={infoGrid}>
-        <div style={infoCard}>
-          <h2 style={sectionTitle}>Mock Exams: Last Updated 6/5/26</h2>
-          <p style={sectionText}>
-            During the Y10 mock exam seasons there will be 2 sessions in a day. The
-            exams will begin at 8:45am and 1:00pm. Please arrive 30
-            minutes before these start times.
-          </p>
-        </div>
-
-        <div style={infoCard}>
-          <h2 style={sectionTitle}>Summer Exams: Last Updated 6/5/26</h2>
-          <p style={sectionText}>
-            During the summer exam season there will be 2 sessions in a day.
-            The exams will begin at 9:00am and 1:00pm. Please arrive 30 minutes
-            before these start times.
-          </p>
-        </div>
-      </div>
     </div>
   );
 }
@@ -187,6 +384,7 @@ const infoGrid: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
   gap: 20,
+  marginBottom: 28,
 };
 
 const infoCard: React.CSSProperties = {

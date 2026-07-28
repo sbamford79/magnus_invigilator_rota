@@ -2,6 +2,12 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
+import {
+  buildCalendarDays,
+  formatLongDate,
+  monthName,
+  toYMD,
+} from '../../../lib/dateHelpers';
 
 type ExamRow = {
   id: string | number;
@@ -15,62 +21,6 @@ type ExamRow = {
   duration_minutes: number | null;
   notes: string | null;
 };
-
-function toYMD(date: Date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
-
-function parseDate(dateStr: string) {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  return new Date(y, m - 1, d);
-}
-
-function monthName(date: Date) {
-  return date.toLocaleDateString('en-GB', {
-    month: 'long',
-    year: 'numeric',
-  });
-}
-
-function formatLongDate(dateStr: string) {
-  return parseDate(dateStr).toLocaleDateString('en-GB', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  });
-}
-
-function buildCalendarDays(viewDate: Date) {
-  const year = viewDate.getFullYear();
-  const month = viewDate.getMonth();
-
-  const firstOfMonth = new Date(year, month, 1);
-  const startDay = (firstOfMonth.getDay() + 6) % 7;
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-
-  const cells: Array<{ date: Date | null; key: string }> = [];
-
-  for (let i = 0; i < startDay; i++) {
-    cells.push({ date: null, key: `blank-start-${i}` });
-  }
-
-  for (let day = 1; day <= daysInMonth; day++) {
-    cells.push({
-      date: new Date(year, month, day),
-      key: `day-${year}-${month + 1}-${day}`,
-    });
-  }
-
-  while (cells.length % 7 !== 0) {
-    cells.push({ date: null, key: `blank-end-${cells.length}` });
-  }
-
-  return cells;
-}
 
 export default function InvigilatorExamTimetablePage() {
   const [exams, setExams] = useState<ExamRow[]>([]);
@@ -119,12 +69,6 @@ const { data, error } = await supabase
 
     const loaded = (data ?? []) as ExamRow[];
     setExams(loaded);
-
-    if (loaded.length > 0) {
-      setSelectedDate(loaded[0].exam_date);
-      const firstDate = parseDate(loaded[0].exam_date);
-      setViewDate(new Date(firstDate.getFullYear(), firstDate.getMonth(), 1));
-    }
 
     setStatus('');
   }
@@ -187,7 +131,7 @@ const { data, error } = await supabase
         <section style={calendarCard}>
           <div style={calendarHeader}>
             <button onClick={goPrevMonth} style={navButton}>
-              ←
+              Prev
             </button>
 
             <h2 style={{ margin: 0, fontSize: 18, color: '#4c1d95' }}>
@@ -195,7 +139,7 @@ const { data, error } = await supabase
             </h2>
 
             <button onClick={goNextMonth} style={navButton}>
-              →
+              Next
             </button>
           </div>
 
@@ -292,12 +236,12 @@ const { data, error } = await supabase
               <div key={exam.id} style={examRow}>
                 <div>
                   <div style={examTitle}>
-                    {exam.exam_time || 'Time TBC'} —{' '}
+                    {exam.exam_time || 'Time TBC'} -{' '}
                     {exam.paper_code || 'Paper'}
                   </div>
 
                   <div style={examMeta}>
-                    {exam.exam_board || 'Board'} ·{' '}
+                    {exam.exam_board || 'Board'} -{' '}
                     {exam.exam_level || 'Level'}
                   </div>
 

@@ -9,7 +9,7 @@ export default function LoginPage() {
   const [status, setStatus] = useState<string | null>(null);
 
   async function handleLogin() {
-    setStatus('Logging in…');
+    setStatus('Logging in...');
 
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
@@ -17,12 +17,12 @@ export default function LoginPage() {
     });
 
     if (error) {
-      setStatus('❌ ' + error.message);
+      setStatus('Error: ' + error.message);
       return;
     }
 
     if (!data.session) {
-      setStatus('⚠️ Login completed but no session found.');
+      setStatus('Warning: Login completed but no session found.');
       return;
     }
 
@@ -34,7 +34,7 @@ export default function LoginPage() {
       .eq('auth_user_id', userId)
       .maybeSingle();
 
-    setStatus('✅ Login successful');
+    setStatus('Login successful');
 
     if (invigilator) {
       window.location.href = '/invigilator';
@@ -54,7 +54,7 @@ export default function LoginPage() {
     });
 
     if (error) {
-      setStatus('❌ ' + error.message);
+      setStatus('Error: ' + error.message);
       return;
     }
 
@@ -156,7 +156,7 @@ export default function LoginPage() {
             style={{
               marginTop: 16,
               textAlign: 'center',
-              color: status.startsWith('❌') ? '#991b1b' : '#4c1d95',
+              color: status.startsWith('Error:') ? '#991b1b' : '#4c1d95',
               fontWeight: 600,
             }}
           >

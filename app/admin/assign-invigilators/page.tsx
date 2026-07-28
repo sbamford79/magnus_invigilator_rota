@@ -3,6 +3,7 @@
 import { useContext, useEffect, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { SeasonContext } from '../SeasonContext';
+import { isPastDate } from '../../../lib/dateHelpers';
 
 type Shift = {
   id: string;
@@ -354,6 +355,37 @@ export default function AssignInvigilatorsPage() {
         .eq('id', currentSeason.id);
 
       setLastPublishedAt(publishTime);
+
+      const newlyAssignedInvigilatorIds = Array.from(
+        new Set(
+          (unpublishedAssignments ?? []).map(
+            assignment => assignment.invigilator_id
+          )
+        )
+      );
+
+      if (newlyAssignedInvigilatorIds.length > 0) {
+        const { error: notificationError } = await supabase
+          .from('invigilator_shift_notifications')
+          .insert(
+            newlyAssignedInvigilatorIds.map(invigilatorId => ({
+              season_id: currentSeason.id,
+              invigilator_id: invigilatorId,
+              notification_type: 'assignments_published',
+              title: 'You have new assigned shifts',
+              message:
+                'New shifts have been assigned to you. Visit My Shifts to review them.',
+            }))
+          );
+
+        if (notificationError) {
+          setStatus(
+            `Assignments published, but notifications could not be created: ${notificationError.message}`
+          );
+          await loadData();
+          return;
+        }
+      }
     }
 
     setStatus('All assignments published');
@@ -380,11 +412,17 @@ export default function AssignInvigilatorsPage() {
     const aRemaining = Math.max(a.needed - aAssigned, 0);
     const bRemaining = Math.max(b.needed - bAssigned, 0);
 
-    const aHasSpace = aRemaining > 0;
-    const bHasSpace = bRemaining > 0;
+    const aIsPast = isPastDate(a.date);
+    const bIsPast = isPastDate(b.date);
+    const aNeedsCurrentCover = aRemaining > 0 && !aIsPast;
+    const bNeedsCurrentCover = bRemaining > 0 && !bIsPast;
 
-    if (aHasSpace !== bHasSpace) {
-      return aHasSpace ? -1 : 1;
+    if (aNeedsCurrentCover !== bNeedsCurrentCover) {
+      return aNeedsCurrentCover ? -1 : 1;
+    }
+
+    if (aIsPast !== bIsPast) {
+      return aIsPast ? 1 : -1;
     }
 
     if (a.date !== b.date) {
@@ -503,7 +541,7 @@ export default function AssignInvigilatorsPage() {
                 }}
               >
                 <h3 style={{ marginTop: 0, color: '#4c1d95' }}>
-                  {shift.label} — {formatSessionLabel(shift.session)} (
+                  {shift.label} - {formatSessionLabel(shift.session)} (
                   {assignedCount}/{shift.needed} assigned)
                 </h3>
 

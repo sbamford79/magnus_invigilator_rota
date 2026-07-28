@@ -2,15 +2,25 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
+import {
+  buildCalendarDays,
+  daysUntil,
+  isPastDate,
+  isTodayOrFuture,
+  monthName,
+  toYMD,
+} from '../../../lib/dateHelpers';
 
 type SessionKey = 'morning' | 'mid' | 'afternoon';
 
 type MyShift = {
   assignmentId: string;
   shiftSlotId: string;
+  seasonId: string;
   date: string;
   label: string;
   session: SessionKey;
+  attended: boolean;
 };
 
 type ShiftGroup = {
@@ -22,32 +32,6 @@ type ShiftGroup = {
 function formatSession(session: SessionKey) {
   if (session === 'mid') return 'Mid';
   return session.charAt(0).toUpperCase() + session.slice(1);
-}
-
-function parseLocalDate(dateStr: string) {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  return new Date(y, m - 1, d);
-}
-
-function isTodayOrFuture(dateStr: string) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  const shiftDate = parseLocalDate(dateStr);
-  shiftDate.setHours(0, 0, 0, 0);
-
-  return shiftDate >= today;
-}
-
-function daysUntil(dateStr: string) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  const target = parseLocalDate(dateStr);
-  target.setHours(0, 0, 0, 0);
-
-  const diff = target.getTime() - today.getTime();
-  return Math.ceil(diff / (1000 * 60 * 60 * 24));
 }
 
 const sessionOrder: Record<SessionKey, number> = {
@@ -117,6 +101,14 @@ function addShiftToCalendar(shift: MyShift) {
 export default function MyShiftsPage() {
   const [shifts, setShifts] = useState<MyShift[]>([]);
   const [status, setStatus] = useState('Loading...');
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archiveMonth, setArchiveMonth] = useState(() => {
+    const today = new Date();
+    return new Date(today.getFullYear(), today.getMonth(), 1);
+  });
+  const [selectedArchiveDate, setSelectedArchiveDate] = useState<string | null>(
+    null
+  );
 
   useEffect(() => {
     loadShifts();
@@ -149,9 +141,11 @@ export default function MyShiftsPage() {
       .select(`
         id,
         shift_slot_id,
+        attended,
         shift_slots (
           session_key,
           exam_days (
+            season_id,
             exam_date,
             label
           )
@@ -169,20 +163,31 @@ export default function MyShiftsPage() {
       .map((row: any) => ({
         assignmentId: row.id,
         shiftSlotId: row.shift_slot_id,
+        seasonId: row.shift_slots?.exam_days?.season_id,
         session: row.shift_slots?.session_key,
         date: row.shift_slots?.exam_days?.exam_date,
         label: row.shift_slots?.exam_days?.label,
+        attended: row.attended === true,
       }))
-      .filter(shift => shift.date && isTodayOrFuture(shift.date))
+      .filter(shift => shift.date)
       .sort((a, b) => {
         if (a.date !== b.date) return a.date.localeCompare(b.date);
         return (sessionOrder[a.session] ?? 99) - (sessionOrder[b.session] ?? 99);
       });
 
     setShifts(mapped);
+
+    const latestArchivedShift = [...mapped]
+      .filter(shift => isPastDate(shift.date))
+      .sort((a, b) => b.date.localeCompare(a.date))[0];
+
+    if (latestArchivedShift) {
+      const [year, month] = latestArchivedShift.date.split('-').map(Number);
+      setArchiveMonth(new Date(year, month - 1, 1));
+    }
   }
 
-  async function releaseShift(assignmentId: string, shiftSlotId: string) {
+  async function releaseShift(shift: MyShift) {
     const confirmRelease = window.confirm(
       'Release this shift? It will return to the available shifts list and your application will be removed.'
     );
@@ -198,7 +203,7 @@ export default function MyShiftsPage() {
 
     const { data: invigilator } = await supabase
       .from('invigilators')
-      .select('id')
+      .select('id, full_name')
       .eq('auth_user_id', user.id)
       .single();
 
@@ -210,7 +215,7 @@ export default function MyShiftsPage() {
     const { error: assignmentError } = await supabase
       .from('shift_assignments')
       .delete()
-      .eq('id', assignmentId);
+      .eq('id', shift.assignmentId);
 
     if (assignmentError) {
       setStatus(assignmentError.message);
@@ -220,7 +225,7 @@ export default function MyShiftsPage() {
     const { error: applicationError } = await supabase
       .from('shift_applications')
       .delete()
-      .eq('shift_slot_id', shiftSlotId)
+      .eq('shift_slot_id', shift.shiftSlotId)
       .eq('invigilator_id', invigilator.id);
 
     if (applicationError) {
@@ -228,14 +233,29 @@ export default function MyShiftsPage() {
       return;
     }
 
-    setStatus('Shift released');
+    const { error: notificationError } = await supabase
+      .from('shift_release_notifications')
+      .insert({
+        season_id: shift.seasonId,
+        invigilator_id: invigilator.id,
+        invigilator_name: invigilator.full_name,
+        shift_slot_id: shift.shiftSlotId,
+        exam_date: shift.date,
+        session_key: shift.session,
+      });
+
+    setStatus(
+      notificationError
+        ? `Shift released, but the admin notification could not be created: ${notificationError.message}`
+        : 'Shift released and the exams team has been notified'
+    );
     loadShifts();
   }
 
   const groupedShifts = useMemo(() => {
     const groups = new Map<string, ShiftGroup>();
 
-    for (const shift of shifts) {
+    for (const shift of shifts.filter(shift => isTodayOrFuture(shift.date))) {
       if (!groups.has(shift.date)) {
         groups.set(shift.date, {
           date: shift.date,
@@ -249,6 +269,48 @@ export default function MyShiftsPage() {
 
     return Array.from(groups.values());
   }, [shifts]);
+
+  const archivedShifts = useMemo(
+    () => shifts.filter(shift => isPastDate(shift.date)),
+    [shifts]
+  );
+
+  const archiveCalendarCells = useMemo(
+    () => buildCalendarDays(archiveMonth),
+    [archiveMonth]
+  );
+
+  const archivedShiftsForMonth = useMemo(() => {
+    const monthPrefix = `${archiveMonth.getFullYear()}-${String(
+      archiveMonth.getMonth() + 1
+    ).padStart(2, '0')}`;
+
+    return archivedShifts.filter(
+      shift =>
+        shift.date.startsWith(monthPrefix) &&
+        (!selectedArchiveDate || shift.date === selectedArchiveDate)
+    );
+  }, [archivedShifts, archiveMonth, selectedArchiveDate]);
+
+  const archiveCountsByDate = useMemo(() => {
+    const counts: Record<string, number> = {};
+    archivedShifts.forEach(shift => {
+      counts[shift.date] = (counts[shift.date] ?? 0) + 1;
+    });
+    return counts;
+  }, [archivedShifts]);
+
+  function changeArchiveMonth(amount: number) {
+    setArchiveMonth(current => {
+      const next = new Date(
+        current.getFullYear(),
+        current.getMonth() + amount,
+        1
+      );
+      return next;
+    });
+    setSelectedArchiveDate(null);
+  }
 
   if (status === 'Loading...') {
     return <div style={{ padding: 24 }}>Loading shifts...</div>;
@@ -368,7 +430,7 @@ export default function MyShiftsPage() {
                       >
                         <div style={{ marginBottom: 8 }}>
                           <strong>Session:</strong>{' '}
-                          {formatSession(shift.session)} ({time.start}–
+                          {formatSession(shift.session)} ({time.start}-
                           {time.end})
                         </div>
 
@@ -397,12 +459,7 @@ export default function MyShiftsPage() {
 
                           {canRelease ? (
                             <button
-                              onClick={() =>
-                                releaseShift(
-                                  shift.assignmentId,
-                                  shift.shiftSlotId
-                                )
-                              }
+                              onClick={() => releaseShift(shift)}
                               style={{
                                 background: '#4c1d95',
                                 color: 'white',
@@ -439,6 +496,296 @@ export default function MyShiftsPage() {
           })}
         </div>
       )}
+
+      <section
+        style={{
+          marginTop: 24,
+          background: 'white',
+          border: '1px solid #e5e7eb',
+          borderRadius: 16,
+          boxShadow: '0 4px 14px rgba(0,0,0,0.06)',
+          overflow: 'hidden',
+        }}
+      >
+        <button
+          onClick={() => setArchiveOpen(current => !current)}
+          style={{
+            width: '100%',
+            border: 'none',
+            background: '#fafafa',
+            padding: 18,
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 12,
+            cursor: 'pointer',
+            color: '#4c1d95',
+            textAlign: 'left',
+          }}
+        >
+          <span>
+            <strong style={{ fontSize: 20 }}>Completed shifts archive</strong>
+            <span
+              style={{
+                display: 'block',
+                marginTop: 4,
+                color: '#6b7280',
+                fontWeight: 500,
+              }}
+            >
+              {archivedShifts.length} past shift
+              {archivedShifts.length === 1 ? '' : 's'} available
+            </span>
+          </span>
+          <strong>{archiveOpen ? 'Close ▲' : 'Open ▼'}</strong>
+        </button>
+
+        {archiveOpen && (
+          <div style={{ padding: 18, borderTop: '1px solid #e5e7eb' }}>
+            {archivedShifts.length === 0 ? (
+              <p style={{ margin: 0, color: '#6b7280' }}>
+                Completed shifts will appear here after their exam date.
+              </p>
+            ) : (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns:
+                    'repeat(auto-fit, minmax(280px, 1fr))',
+                  gap: 20,
+                  alignItems: 'start',
+                }}
+              >
+                <div
+                  style={{
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 14,
+                    padding: 14,
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: 8,
+                      marginBottom: 12,
+                    }}
+                  >
+                    <button
+                      onClick={() => changeArchiveMonth(-1)}
+                      style={archiveNavButton}
+                    >
+                      Prev
+                    </button>
+                    <strong style={{ color: '#4c1d95' }}>
+                      {monthName(archiveMonth)}
+                    </strong>
+                    <button
+                      onClick={() => changeArchiveMonth(1)}
+                      style={archiveNavButton}
+                    >
+                      Next
+                    </button>
+                  </div>
+
+                  <div style={archiveWeekdayGrid}>
+                    {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(
+                      day => (
+                        <div key={day} style={archiveWeekday}>
+                          {day}
+                        </div>
+                      )
+                    )}
+                  </div>
+
+                  <div style={archiveCalendarGrid}>
+                    {archiveCalendarCells.map(cell => {
+                      if (!cell.date) return <div key={cell.key} />;
+
+                      const date = toYMD(cell.date);
+                      const shiftCount = archiveCountsByDate[date] ?? 0;
+                      const selected = date === selectedArchiveDate;
+
+                      return (
+                        <button
+                          key={cell.key}
+                          disabled={shiftCount === 0}
+                          onClick={() =>
+                            setSelectedArchiveDate(current =>
+                              current === date ? null : date
+                            )
+                          }
+                          style={{
+                            ...archiveDateButton,
+                            background: selected
+                              ? '#4c1d95'
+                              : shiftCount > 0
+                              ? '#ede9fe'
+                              : 'white',
+                            color: selected
+                              ? 'white'
+                              : shiftCount > 0
+                              ? '#4c1d95'
+                              : '#9ca3af',
+                            cursor: shiftCount > 0 ? 'pointer' : 'default',
+                            fontWeight: shiftCount > 0 ? 800 : 500,
+                          }}
+                        >
+                          {cell.date.getDate()}
+                          {shiftCount > 0 && (
+                            <span
+                              style={{
+                                fontSize: 9,
+                                lineHeight: 1,
+                                marginTop: 2,
+                              }}
+                            >
+                              {shiftCount} shift{shiftCount === 1 ? '' : 's'}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {selectedArchiveDate && (
+                    <button
+                      onClick={() => setSelectedArchiveDate(null)}
+                      style={{
+                        ...archiveNavButton,
+                        marginTop: 12,
+                        width: '100%',
+                      }}
+                    >
+                      Show whole month
+                    </button>
+                  )}
+                </div>
+
+                <div>
+                  <h2 style={{ marginTop: 0, color: '#4c1d95' }}>
+                    {selectedArchiveDate
+                      ? new Date(
+                          `${selectedArchiveDate}T00:00:00`
+                        ).toLocaleDateString('en-GB', {
+                          day: 'numeric',
+                          month: 'long',
+                          year: 'numeric',
+                        })
+                      : monthName(archiveMonth)}
+                  </h2>
+
+                  {archivedShiftsForMonth.length === 0 ? (
+                    <div
+                      style={{
+                        color: '#6b7280',
+                        background: '#f9fafb',
+                        borderRadius: 12,
+                        padding: 16,
+                      }}
+                    >
+                      No completed shifts in this month.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'grid', gap: 10 }}>
+                      {archivedShiftsForMonth.map(shift => (
+                        <div
+                          key={shift.assignmentId}
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            gap: 12,
+                            flexWrap: 'wrap',
+                            border: '1px solid #e5e7eb',
+                            borderRadius: 12,
+                            padding: 14,
+                            background: '#fafafa',
+                          }}
+                        >
+                          <div>
+                            <strong style={{ color: '#1f2937' }}>
+                              {shift.label}
+                            </strong>
+                            <div
+                              style={{
+                                color: '#6b7280',
+                                marginTop: 4,
+                                fontSize: 14,
+                              }}
+                            >
+                              {formatSession(shift.session)} ·{' '}
+                              {sessionTimes[shift.session].start}–
+                              {sessionTimes[shift.session].end}
+                            </div>
+                          </div>
+                          <span
+                            style={{
+                              borderRadius: 999,
+                              padding: '6px 10px',
+                              fontSize: 12,
+                              fontWeight: 800,
+                              background: shift.attended
+                                ? '#dcfce7'
+                                : '#fef3c7',
+                              color: shift.attended ? '#166534' : '#92400e',
+                            }}
+                          >
+                            {shift.attended
+                              ? 'Attendance confirmed'
+                              : 'Attendance not marked'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
+
+const archiveNavButton: React.CSSProperties = {
+  background: '#f5f3ff',
+  color: '#4c1d95',
+  border: '1px solid #ddd6fe',
+  borderRadius: 8,
+  padding: '6px 10px',
+  cursor: 'pointer',
+  fontWeight: 800,
+};
+
+const archiveWeekdayGrid: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(7, 1fr)',
+  gap: 4,
+  marginBottom: 4,
+};
+
+const archiveWeekday: React.CSSProperties = {
+  textAlign: 'center',
+  fontSize: 10,
+  fontWeight: 700,
+  color: '#6b7280',
+};
+
+const archiveCalendarGrid: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(7, 1fr)',
+  gap: 4,
+};
+
+const archiveDateButton: React.CSSProperties = {
+  minHeight: 45,
+  border: '1px solid #e5e7eb',
+  borderRadius: 8,
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+};

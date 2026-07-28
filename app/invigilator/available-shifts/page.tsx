@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
+import { isTodayOrFuture } from '../../../lib/dateHelpers';
 
 type SessionKey = 'morning' | 'mid' | 'afternoon';
 
@@ -33,13 +34,14 @@ const sessionOrder: Record<SessionKey, number> = {
   afternoon: 3,
 };
 
+function getShiftKey(date: string, session: string) {
+  return `${date}__${session}`;
+}
+
 export default function AvailableShiftsPage() {
   const [shifts, setShifts] = useState<AvailableShift[]>([]);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState('');
-
-  const today = new Date(); 
-  today.setHours(0,0,0,0);
 
   useEffect(() => {
     loadShifts();
@@ -107,7 +109,15 @@ export default function AvailableShiftsPage() {
 
     const { data: applicationRows, error: applicationError } = await supabase
       .from('shift_applications')
-      .select('shift_slot_id')
+      .select(`
+        shift_slot_id,
+        shift_slots (
+          session_key,
+          exam_days (
+            exam_date
+          )
+        )
+      `)
       .eq('invigilator_id', invigilatorId);
 
     if (applicationError) {
@@ -119,6 +129,52 @@ export default function AvailableShiftsPage() {
     const appliedShiftIds = new Set(
       (applicationRows ?? []).map(row => row.shift_slot_id)
     );
+
+    const { data: invigilatorAssignmentRows, error: invigilatorAssignmentError } =
+      await supabase
+        .from('shift_assignments')
+        .select(`
+          shift_slot_id,
+          shift_slots (
+            session_key,
+            exam_days (
+              exam_date
+            )
+          )
+        `)
+        .eq('invigilator_id', invigilatorId);
+
+    if (invigilatorAssignmentError) {
+      setStatus(
+        `Could not load existing assignments: ${invigilatorAssignmentError.message}`
+      );
+      setLoading(false);
+      return;
+    }
+
+    const assignedShiftIdsForThisInvigilator = new Set(
+      (invigilatorAssignmentRows ?? []).map(row => row.shift_slot_id)
+    );
+
+    const occupiedShiftKeys = new Set<string>();
+
+    (applicationRows ?? []).forEach((row: any) => {
+      const date = row.shift_slots?.exam_days?.exam_date;
+      const session = row.shift_slots?.session_key;
+
+      if (date && session) {
+        occupiedShiftKeys.add(getShiftKey(date, session));
+      }
+    });
+
+    (invigilatorAssignmentRows ?? []).forEach((row: any) => {
+      const date = row.shift_slots?.exam_days?.exam_date;
+      const session = row.shift_slots?.session_key;
+
+      if (date && session) {
+        occupiedShiftKeys.add(getShiftKey(date, session));
+      }
+    });
 
     const { data: assignmentRows, error: assignmentError } = await supabase
       .from('shift_assignments')
@@ -139,12 +195,6 @@ export default function AvailableShiftsPage() {
         (assignedCountByShift[row.shift_slot_id] ?? 0) + 1;
     });
 
-    const assignedShiftIdsForThisInvigilator = new Set(
-      (assignmentRows ?? [])
-        .filter(row => row.invigilator_id === invigilatorId)
-        .map(row => row.shift_slot_id)
-    );
-
     const mappedShifts: AvailableShift[] = (slots as any[])
       .map(slot => {
         const assignedCount = assignedCountByShift[slot.id] ?? 0;
@@ -162,10 +212,19 @@ export default function AvailableShiftsPage() {
       })
       .filter(shift => {
         const isFull = shift.assignedCount >= shift.needed;
+        const hasAppliedForThisShift = appliedShiftIds.has(shift.shiftSlotId);
         const alreadyAssignedToThisPerson =
           assignedShiftIdsForThisInvigilator.has(shift.shiftSlotId);
+        const alreadyBusyAtThisTime = occupiedShiftKeys.has(
+          getShiftKey(shift.date, shift.session)
+        );
 
-        return !isFull && !alreadyAssignedToThisPerson;
+        return (
+          isTodayOrFuture(shift.date) &&
+          !isFull &&
+          !alreadyAssignedToThisPerson &&
+          (!alreadyBusyAtThisTime || hasAppliedForThisShift)
+        );
       })
       .sort((a, b) => {
         if (a.date !== b.date) return a.date.localeCompare(b.date);
@@ -211,6 +270,78 @@ export default function AvailableShiftsPage() {
 
       setStatus('Application removed.');
     } else {
+      const { data: existingApplications, error: existingApplicationsError } =
+        await supabase
+          .from('shift_applications')
+          .select(`
+            shift_slot_id,
+            shift_slots (
+              session_key,
+              exam_days (
+                exam_date
+              )
+            )
+          `)
+          .eq('invigilator_id', invigilator.id)
+          .neq('shift_slot_id', shift.shiftSlotId);
+
+      if (existingApplicationsError) {
+        setStatus(
+          `Could not check existing applications: ${existingApplicationsError.message}`
+        );
+        return;
+      }
+
+      const { data: existingAssignments, error: existingAssignmentsError } =
+        await supabase
+          .from('shift_assignments')
+          .select(`
+            shift_slot_id,
+            shift_slots (
+              session_key,
+              exam_days (
+                exam_date
+              )
+            )
+          `)
+          .eq('invigilator_id', invigilator.id)
+          .neq('shift_slot_id', shift.shiftSlotId);
+
+      if (existingAssignmentsError) {
+        setStatus(
+          `Could not check existing assignments: ${existingAssignmentsError.message}`
+        );
+        return;
+      }
+
+      const hasClashingShift =
+        (existingApplications ?? []).some((row: any) => {
+          const date = row.shift_slots?.exam_days?.exam_date;
+          const session = row.shift_slots?.session_key;
+
+          return (
+            date === shift.date &&
+            session === shift.session
+          );
+        }) ||
+        (existingAssignments ?? []).some((row: any) => {
+          const date = row.shift_slots?.exam_days?.exam_date;
+          const session = row.shift_slots?.session_key;
+
+          return (
+            date === shift.date &&
+            session === shift.session
+          );
+        });
+
+      if (hasClashingShift) {
+        setStatus(
+          'You already have an application or assignment for this date and session.'
+        );
+        await loadShifts();
+        return;
+      }
+
       const { error } = await supabase.from('shift_applications').insert({
         shift_slot_id: shift.shiftSlotId,
         invigilator_id: invigilator.id,
@@ -329,13 +460,7 @@ export default function AvailableShiftsPage() {
               </div>
 
               <div style={{ display: 'grid', gap: 16 }}>
-                {group.shifts.filter(shift => {
-                const shiftDate = new Date(shift.date);
-                shiftDate.setHours(0, 0, 0, 0);
-
-                return shiftDate>= today; // only future or today
-               })
-               .map(shift=> (
+                {group.shifts.map(shift => (
                   <div
                     key={shift.shiftSlotId}
                     style={{

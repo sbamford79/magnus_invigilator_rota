@@ -126,6 +126,7 @@ export default function AdminLayout({
     { href: '/admin/assign-invigilators', label: 'Assign' },
     { href: '/admin/my-team-today', label: 'My Team Today' },
     { href: '/admin/exam-timetable', label: 'Exam Timetable' },
+    { href: '/admin/invigilator-information', label: 'Information' },
     { href: '/admin/invigilators', label: 'Invigilators' },
     { href: '/admin/reports', label: 'Reports' },
   ];

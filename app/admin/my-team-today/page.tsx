@@ -3,6 +3,12 @@
 import { useContext, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { SeasonContext } from '../SeasonContext';
+import {
+  buildCalendarDays,
+  formatLongDate,
+  monthName,
+  toYMD,
+} from '../../../lib/dateHelpers';
 
 type SessionKey = 'morning' | 'mid' | 'afternoon';
 
@@ -14,7 +20,10 @@ type ShiftSlot = {
 };
 
 type Assignment = {
+  id: string;
   shift_slot_id: string;
+  attended: boolean;
+  attended_at: string | null;
   invigilators:
     | {
         full_name: string;
@@ -30,34 +39,6 @@ type CalendarGap = {
   spaces_left: number;
 };
 
-function toYMD(date: Date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
-
-function parseDate(dateStr: string) {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  return new Date(y, m - 1, d);
-}
-
-function monthName(date: Date) {
-  return date.toLocaleDateString('en-GB', {
-    month: 'long',
-    year: 'numeric',
-  });
-}
-
-function formatLongDate(dateStr: string) {
-  return parseDate(dateStr).toLocaleDateString('en-GB', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  });
-}
-
 function sessionLabel(session: SessionKey) {
   if (session === 'mid') return 'Mid';
   return session.charAt(0).toUpperCase() + session.slice(1);
@@ -68,34 +49,6 @@ const sessionOrder: Record<SessionKey, number> = {
   mid: 2,
   afternoon: 3,
 };
-
-function buildCalendarDays(viewDate: Date) {
-  const year = viewDate.getFullYear();
-  const month = viewDate.getMonth();
-
-  const firstOfMonth = new Date(year, month, 1);
-  const startDay = (firstOfMonth.getDay() + 6) % 7;
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-
-  const cells: Array<{ date: Date | null; key: string }> = [];
-
-  for (let i = 0; i < startDay; i++) {
-    cells.push({ date: null, key: `blank-start-${i}` });
-  }
-
-  for (let day = 1; day <= daysInMonth; day++) {
-    cells.push({
-      date: new Date(year, month, day),
-      key: `day-${year}-${month + 1}-${day}`,
-    });
-  }
-
-  while (cells.length % 7 !== 0) {
-    cells.push({ date: null, key: `blank-end-${cells.length}` });
-  }
-
-  return cells;
-}
 
 export default function AdminMyTeamTodayPage() {
   const { currentSeason } = useContext(SeasonContext);
@@ -111,6 +64,9 @@ export default function AdminMyTeamTodayPage() {
   const [calendarGaps, setCalendarGaps] = useState<Record<string, number>>({});
   const [status, setStatus] = useState('');
   const [loading, setLoading] = useState(false);
+  const [savingAttendanceId, setSavingAttendanceId] = useState<string | null>(
+    null
+  );
 
   useEffect(() => {
     loadDay();
@@ -240,7 +196,10 @@ export default function AdminMyTeamTodayPage() {
     const { data: assignmentRows, error: assignmentError } = await supabase
       .from('shift_assignments')
       .select(`
+        id,
         shift_slot_id,
+        attended,
+        attended_at,
         invigilators (
           full_name
         )
@@ -258,10 +217,45 @@ export default function AdminMyTeamTodayPage() {
     setLoading(false);
   }
 
+  async function toggleAttendance(assignmentId: string, attended: boolean) {
+    setSavingAttendanceId(assignmentId);
+    setStatus('');
+
+    setAssignments(current =>
+      current.map(assignment =>
+        assignment.id === assignmentId
+          ? {
+              ...assignment,
+              attended,
+              attended_at: attended ? new Date().toISOString() : null,
+            }
+          : assignment
+      )
+    );
+
+    const { error } = await supabase
+      .from('shift_assignments')
+      .update({
+        attended,
+        attended_at: attended ? new Date().toISOString() : null,
+      })
+      .eq('id', assignmentId);
+
+    if (error) {
+      setStatus(error.message);
+      await loadDay();
+    }
+
+    setSavingAttendanceId(null);
+  }
+
   const calendarCells = useMemo(() => buildCalendarDays(viewDate), [viewDate]);
 
   const assignedBySlot = useMemo(() => {
-    const map: Record<string, string[]> = {};
+    const map: Record<
+      string,
+      { id: string; name: string; attended: boolean }[]
+    > = {};
 
     for (const assignment of assignments) {
       if (!map[assignment.shift_slot_id]) {
@@ -273,7 +267,11 @@ export default function AdminMyTeamTodayPage() {
   : assignment.invigilators;
 
 if (invigilator?.full_name) {
-  map[assignment.shift_slot_id].push(invigilator.full_name);
+  map[assignment.shift_slot_id].push({
+    id: assignment.id,
+    name: invigilator.full_name,
+    attended: assignment.attended === true,
+  });
 }
     }
 
@@ -319,7 +317,7 @@ if (invigilator?.full_name) {
         <div style={calendarCard}>
           <div style={calendarHeader}>
             <button onClick={goPrevMonth} style={navButton}>
-              ←
+              Prev
             </button>
 
             <h2 style={{ margin: 0, fontSize: 18, color: '#4c1d95' }}>
@@ -327,7 +325,7 @@ if (invigilator?.full_name) {
             </h2>
 
             <button onClick={goNextMonth} style={navButton}>
-              →
+              Next
             </button>
           </div>
 
@@ -409,7 +407,7 @@ if (invigilator?.full_name) {
         ) : slots.length === 0 ? (
           <p style={muted}>No shifts have been set up for this date.</p>
         ) : gaps.length === 0 ? (
-          <p style={muted}>No gaps — all sessions are fully staffed.</p>
+          <p style={muted}>No gaps - all sessions are fully staffed.</p>
         ) : (
           <div style={{ display: 'grid', gap: 10 }}>
             {gaps.map(slot => (
@@ -440,7 +438,10 @@ if (invigilator?.full_name) {
         ) : (
           <div style={sessionList}>
             {slots.map(slot => {
-              const names = assignedBySlot[slot.id] ?? [];
+              const assignedInvigilators = assignedBySlot[slot.id] ?? [];
+              const attendedCount = assignedInvigilators.filter(
+                assignment => assignment.attended
+              ).length;
 
               return (
                 <div key={slot.id} style={teamCard}>
@@ -451,10 +452,12 @@ if (invigilator?.full_name) {
 
                     <span
                       style={
-                        names.length >= slot.needed ? greenBadge : amberBadge
+                        assignedInvigilators.length >= slot.needed
+                          ? greenBadge
+                          : amberBadge
                       }
                     >
-                      {names.length}/{slot.needed}
+                      {assignedInvigilators.length}/{slot.needed} assigned
                     </span>
                   </div>
 
@@ -464,16 +467,76 @@ if (invigilator?.full_name) {
                     </div>
                   )}
 
-                  {names.length === 0 ? (
+                  {assignedInvigilators.length === 0 ? (
                     <p style={muted}>No one assigned yet.</p>
                   ) : (
-                    <ul style={{ margin: 0, paddingLeft: 20 }}>
-                      {names.map(name => (
-                        <li key={name} style={{ marginBottom: 4 }}>
-                          {name}
-                        </li>
-                      ))}
-                    </ul>
+                    <>
+                      <div
+                        style={{
+                          marginBottom: 10,
+                          color: '#4b5563',
+                          fontSize: 13,
+                          fontWeight: 700,
+                        }}
+                      >
+                        {attendedCount}/{assignedInvigilators.length} marked
+                        attended
+                      </div>
+                      <div style={{ display: 'grid', gap: 8 }}>
+                        {assignedInvigilators.map(assignment => (
+                          <label
+                            key={assignment.id}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 10,
+                              padding: '9px 10px',
+                              borderRadius: 10,
+                              border: assignment.attended
+                                ? '1px solid #86efac'
+                                : '1px solid #e5e7eb',
+                              background: assignment.attended
+                                ? '#f0fdf4'
+                                : 'white',
+                              cursor:
+                                savingAttendanceId === assignment.id
+                                  ? 'wait'
+                                  : 'pointer',
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={assignment.attended}
+                              disabled={savingAttendanceId === assignment.id}
+                              onChange={event =>
+                                toggleAttendance(
+                                  assignment.id,
+                                  event.target.checked
+                                )
+                              }
+                            />
+                            <span
+                              style={{
+                                flex: 1,
+                                fontWeight: 700,
+                                color: '#1f2937',
+                              }}
+                            >
+                              {assignment.name}
+                            </span>
+                            <span
+                              style={
+                                assignment.attended ? greenBadge : greyBadge
+                              }
+                            >
+                              {assignment.attended
+                                ? 'Attended'
+                                : 'Not marked'}
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    </>
                   )}
                 </div>
               );
