@@ -22,6 +22,8 @@ type MyShift = {
   session: SessionKey;
   attended: boolean;
   isActiveSeason: boolean;
+  clockInAt: string | null;
+  clockOutAt: string | null;
 };
 
 type ShiftGroup = {
@@ -157,6 +159,8 @@ export default function MyShiftsPage() {
         id,
         shift_slot_id,
         attended,
+        clock_in_at,
+        clock_out_at,
         shift_slots (
           session_key,
           exam_days (
@@ -183,6 +187,8 @@ export default function MyShiftsPage() {
         date: row.shift_slots?.exam_days?.exam_date,
         label: row.shift_slots?.exam_days?.label,
         attended: row.attended === true,
+        clockInAt: row.clock_in_at,
+        clockOutAt: row.clock_out_at,
         isActiveSeason: activeSeasonIds.has(
           row.shift_slots?.exam_days?.season_id
         ),
@@ -738,6 +744,32 @@ export default function MyShiftsPage() {
                               {formatSession(shift.session)} ·{' '}
                               {sessionTimes[shift.session].start}–
                               {sessionTimes[shift.session].end}
+                            </div>
+                            <div
+                              style={{
+                                color: '#4b5563',
+                                marginTop: 5,
+                                fontSize: 13,
+                              }}
+                            >
+                              Clocked in:{' '}
+                              {shift.clockInAt
+                                ? new Date(
+                                    shift.clockInAt
+                                  ).toLocaleTimeString('en-GB', {
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                  })
+                                : 'Not recorded'}{' '}
+                              · Clocked out:{' '}
+                              {shift.clockOutAt
+                                ? new Date(
+                                    shift.clockOutAt
+                                  ).toLocaleTimeString('en-GB', {
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                  })
+                                : 'Not recorded'}
                             </div>
                           </div>
                           <span

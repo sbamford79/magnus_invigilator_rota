@@ -446,8 +446,8 @@ export default function AssignInvigilatorsPage() {
       >
         <h1 style={{ margin: 0, fontSize: 32 }}>Assign Invigilators</h1>
         <p style={{ marginTop: 10, marginBottom: 0, opacity: 0.95 }}>
-          Assign applicants or manually add invigilators. Shifts needing cover
-          are shown first.
+          Assign invigilators before or after publishing. Private shifts stay
+          hidden from invigilators until you publish them.
         </p>
       </div>
 

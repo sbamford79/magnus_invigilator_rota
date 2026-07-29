@@ -450,16 +450,23 @@ export default function ShiftSetupPage() {
     sessionKey: SessionKey,
     sessionData: DaySession
   ) {
-    const { data: existingSlot } = await supabase
+    const { data: existingSlot, error: lookupError } = await supabase
       .from('shift_slots')
       .select('id')
       .eq('exam_day_id', examDayId)
       .eq('session_key', sessionKey)
       .maybeSingle();
 
+    if (lookupError) throw new Error(lookupError.message);
+
     if (!sessionData.enabled) {
       if (existingSlot?.id) {
-        await supabase.from('shift_slots').delete().eq('id', existingSlot.id);
+        const { error: deleteError } = await supabase
+          .from('shift_slots')
+          .delete()
+          .eq('id', existingSlot.id);
+
+        if (deleteError) throw new Error(deleteError.message);
       }
       return;
     }
@@ -467,17 +474,41 @@ export default function ShiftSetupPage() {
     if (sessionData.needed < 1) return;
 
     if (existingSlot?.id) {
-      await supabase
+      const { error: updateError } = await supabase
         .from('shift_slots')
         .update({ needed: sessionData.needed })
         .eq('id', existingSlot.id);
+
+      if (updateError) throw new Error(updateError.message);
     } else {
-      await supabase.from('shift_slots').insert({
+      const { error: insertError } = await supabase.from('shift_slots').insert({
         exam_day_id: examDayId,
         session_key: sessionKey,
         needed: sessionData.needed,
         published: false,
       });
+
+      if (insertError) throw new Error(insertError.message);
+    }
+  }
+
+  async function openPrivateAssignments() {
+    try {
+      setStatus('Preparing private shifts...');
+
+      for (const day of days) {
+        for (const session of Object.keys(day.sessions) as SessionKey[]) {
+          await syncShiftSlot(day.id, session, day.sessions[session]);
+        }
+      }
+
+      window.location.href = '/admin/assign-invigilators';
+    } catch (error) {
+      setStatus(
+        error instanceof Error
+          ? `Could not prepare shifts: ${error.message}`
+          : 'Could not prepare shifts'
+      );
     }
   }
 
@@ -1339,9 +1370,31 @@ async function calculateRoomRequirements() {
           Publish all shifts
         </button>
 
+        <button
+          onClick={openPrivateAssignments}
+          style={secondaryButton}
+        >
+          Assign shifts privately
+        </button>
+
         <span style={statusStyle(status)}>
           {loading ? 'Loading...' : status}
         </span>
+      </div>
+
+      <div
+        style={{
+          marginBottom: 20,
+          padding: 14,
+          background: '#f5f3ff',
+          border: '1px solid #ddd6fe',
+          borderRadius: 12,
+          color: '#4c1d95',
+          lineHeight: 1.5,
+        }}
+      >
+        You can assign saved shifts before publishing them. Invigilators cannot
+        see or apply for a shift until you choose <strong>Publish all shifts</strong>.
       </div>
 
       <div style={setupGrid}>

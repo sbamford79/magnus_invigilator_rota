@@ -6,6 +6,8 @@ import { buildCalendarDays, monthName, toYMD } from '../../../lib/dateHelpers';
 
 type ShiftItem = {
   id: string;
+  seasonId: string;
+  isActiveSeason: boolean;
   date: string;
   label: string;
   session: string;
@@ -40,7 +42,9 @@ export default function InvigilatorCalendarPage() {
     const today = new Date();
     return new Date(today.getFullYear(), today.getMonth(), 1);
   });
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useState<string>(
+    () => toYMD(new Date())
+  );
   const [hoveredDate, setHoveredDate] = useState<string | null>(null);
 
   useEffect(() => {
@@ -70,13 +74,27 @@ export default function InvigilatorCalendarPage() {
 
     const invigilatorId = invigilator.id;
 
+    const { data: activeSeasonRows, error: seasonError } = await supabase
+      .from('seasons')
+      .select('id')
+      .eq('status', 'active');
+
+    if (seasonError) {
+      setLoading(false);
+      return;
+    }
+
+    const activeSeasonIds = new Set(
+      (activeSeasonRows ?? []).map(season => season.id)
+    );
+
     const { data: assignedData } = await supabase
       .from('shift_assignments')
       .select(`
         id,
         shift_slots (
           session_key,
-          exam_days ( exam_date, label )
+          exam_days ( season_id, exam_date, label )
         )
       `)
       .eq('invigilator_id', invigilatorId)
@@ -88,7 +106,7 @@ export default function InvigilatorCalendarPage() {
         id,
         shift_slots (
           session_key,
-          exam_days ( exam_date, label )
+          exam_days ( season_id, exam_date, label )
         )
       `)
       .eq('invigilator_id', invigilatorId);
@@ -96,13 +114,20 @@ export default function InvigilatorCalendarPage() {
     const mapData = (rows: any[]) =>
       (rows ?? []).map(row => ({
         id: row.id,
+        seasonId: row.shift_slots?.exam_days?.season_id,
+        isActiveSeason: activeSeasonIds.has(
+          row.shift_slots?.exam_days?.season_id
+        ),
         date: row.shift_slots?.exam_days?.exam_date,
         label: row.shift_slots?.exam_days?.label,
         session: row.shift_slots?.session_key,
       }));
 
     const assigned = mapData(assignedData ?? []).filter(
-      shift => shift.date && shift.label && shift.session
+      shift =>
+        shift.date &&
+        shift.label &&
+        shift.session
     );
 
     const assignedKeys = new Set(
@@ -110,20 +135,16 @@ export default function InvigilatorCalendarPage() {
     );
 
     const applied = mapData(appliedData ?? [])
-      .filter(shift => shift.date && shift.label && shift.session)
+      .filter(
+        shift =>
+          shift.date &&
+          shift.label &&
+          shift.session
+      )
       .filter(shift => !assignedKeys.has(`${shift.date}__${shift.session}`));
 
     setAssignedShifts(assigned);
     setAppliedShifts(applied);
-
-    const allDates = [
-      ...assigned.map(shift => shift.date),
-      ...applied.map(shift => shift.date),
-    ].sort();
-
-    if (allDates.length > 0) {
-      setSelectedDate(allDates[0]);
-    }
 
     setLoading(false);
   }
@@ -162,7 +183,7 @@ export default function InvigilatorCalendarPage() {
   const fullShiftList = useMemo(() => {
     const groups = new Map<string, ShiftGroup>();
 
-    for (const shift of assignedShifts) {
+    for (const shift of assignedShifts.filter(shift => shift.isActiveSeason)) {
       if (!groups.has(shift.date)) {
         groups.set(shift.date, {
           date: shift.date,
