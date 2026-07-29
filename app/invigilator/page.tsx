@@ -522,8 +522,13 @@ export default function InvigilatorHomePage() {
       <section aria-label="Important information" style={infoGrid}>
         {notices.map(notice => (
           <div key={notice.id} style={infoCard}>
-            <h2 style={sectionTitle}>{notice.title}</h2>
-            <p style={sectionText}>{notice.content}</p>
+            <div style={noticeHeading}>
+              <span style={noticeMarker} aria-hidden="true">
+                i
+              </span>
+              <h2 style={sectionTitle}>{notice.title}</h2>
+            </div>
+            <div style={sectionText}>{notice.content}</div>
           </div>
         ))}
       </section>
@@ -664,19 +669,46 @@ const infoGrid: React.CSSProperties = {
 
 const infoCard: React.CSSProperties = {
   background: '#ffffff',
-  borderRadius: 14,
-  padding: 22,
-  border: '1px solid #eee',
-  boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
+  borderRadius: 16,
+  padding: 0,
+  border: '1px solid #ddd6fe',
+  overflow: 'hidden',
+  boxShadow: '0 5px 16px rgba(76,29,149,0.08)',
+};
+
+const noticeHeading: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  padding: '14px 18px',
+  background: '#f5f3ff',
+  borderBottom: '1px solid #ede9fe',
+};
+
+const noticeMarker: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 24,
+  height: 24,
+  flexShrink: 0,
+  borderRadius: 999,
+  background: '#6d28d9',
+  color: 'white',
+  fontWeight: 800,
+  fontFamily: 'serif',
 };
 
 const sectionTitle: React.CSSProperties = {
-  marginTop: 0,
+  margin: 0,
   color: '#4c1d95',
+  fontSize: 19,
 };
 
 const sectionText: React.CSSProperties = {
-  margin: 0,
-  lineHeight: 1.6,
-  color: '#333',
+  padding: '17px 18px 19px',
+  lineHeight: 1.65,
+  color: '#374151',
+  whiteSpace: 'pre-wrap',
+  overflowWrap: 'anywhere',
 };
