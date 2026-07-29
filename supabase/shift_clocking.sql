@@ -16,7 +16,7 @@ as $$
 declare
   v_assignment public.shift_assignments;
 begin
-  if p_action not in ('in', 'out') then
+  if p_action not in ('in', 'out', 'undo_in', 'undo_out') then
     raise exception 'Invalid clock action';
   end if;
 
@@ -45,13 +45,25 @@ begin
     update public.shift_assignments
     set clock_in_at = coalesce(clock_in_at, now())
     where id = p_assignment_id;
-  else
+  elsif p_action = 'out' then
     if v_assignment.clock_in_at is null then
       raise exception 'Clock in before clocking out';
     end if;
 
     update public.shift_assignments
     set clock_out_at = coalesce(clock_out_at, now())
+    where id = p_assignment_id;
+  elsif p_action = 'undo_out' then
+    update public.shift_assignments
+    set clock_out_at = null
+    where id = p_assignment_id;
+  else
+    if v_assignment.clock_out_at is not null then
+      raise exception 'Undo clock out before undoing clock in';
+    end if;
+
+    update public.shift_assignments
+    set clock_in_at = null
     where id = p_assignment_id;
   end if;
 end;

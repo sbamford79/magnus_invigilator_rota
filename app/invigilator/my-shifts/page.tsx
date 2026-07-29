@@ -55,6 +55,13 @@ function toCalendarDateTime(dateStr: string, timeStr: string) {
   return `${date}T${time}`;
 }
 
+function previousEveningReminder(dateStr: string) {
+  const reminder = new Date(`${dateStr}T19:00:00`);
+  reminder.setDate(reminder.getDate() - 1);
+
+  return reminder.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+}
+
 function escapeCalendarText(text: string) {
   return text
     .replace(/\\/g, '\\\\')
@@ -81,6 +88,13 @@ function addShiftToCalendar(shift: MyShift) {
     `DTEND:${toCalendarDateTime(shift.date, time.end)}`,
     `SUMMARY:${escapeCalendarText(title)}`,
     `DESCRIPTION:${escapeCalendarText(description)}`,
+    'BEGIN:VALARM',
+    `TRIGGER;VALUE=DATE-TIME:${previousEveningReminder(shift.date)}`,
+    'ACTION:DISPLAY',
+    `DESCRIPTION:${escapeCalendarText(
+      `Reminder: you have a Magnus invigilation shift tomorrow`
+    )}`,
+    'END:VALARM',
     'END:VEVENT',
     'END:VCALENDAR',
   ].join('\r\n');

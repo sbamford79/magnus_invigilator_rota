@@ -166,10 +166,17 @@ export default function InvigilatorHomePage() {
 
   async function clockShift(
     assignmentId: string,
-    action: 'in' | 'out'
+    action: 'in' | 'out' | 'undo_in' | 'undo_out'
   ) {
+    const statusByAction = {
+      in: ['Clocking in...', 'Clocked in.'],
+      out: ['Clocking out...', 'Clocked out.'],
+      undo_in: ['Undoing clock in...', 'Clock in removed.'],
+      undo_out: ['Undoing clock out...', 'Clock out removed.'],
+    };
+
     setClockingId(assignmentId);
-    setClockStatus(action === 'in' ? 'Clocking in...' : 'Clocking out...');
+    setClockStatus(statusByAction[action][0]);
 
     const { error } = await supabase.rpc('clock_shift', {
       p_assignment_id: assignmentId,
@@ -179,7 +186,7 @@ export default function InvigilatorHomePage() {
     if (error) {
       setClockStatus(error.message);
     } else {
-      setClockStatus(action === 'in' ? 'Clocked in.' : 'Clocked out.');
+      setClockStatus(statusByAction[action][1]);
       await loadInvigilator();
     }
 
@@ -310,6 +317,25 @@ export default function InvigilatorHomePage() {
                   >
                     {shift.clockInAt ? 'Clocked in' : 'Clock in'}
                   </button>
+                  {shift.clockInAt && !shift.clockOutAt && (
+                    <button
+                      onClick={() =>
+                        clockShift(shift.assignmentId, 'undo_in')
+                      }
+                      disabled={clockingId !== null}
+                      style={{
+                        background: 'white',
+                        color: '#991b1b',
+                        border: '1px solid #fecaca',
+                        padding: '9px 12px',
+                        borderRadius: 8,
+                        cursor: clockingId === null ? 'pointer' : 'default',
+                        fontWeight: 800,
+                      }}
+                    >
+                      Undo clock in
+                    </button>
+                  )}
                   <button
                     onClick={() => clockShift(shift.assignmentId, 'out')}
                     disabled={
@@ -338,6 +364,25 @@ export default function InvigilatorHomePage() {
                   >
                     {shift.clockOutAt ? 'Clocked out' : 'Clock out'}
                   </button>
+                  {shift.clockOutAt && (
+                    <button
+                      onClick={() =>
+                        clockShift(shift.assignmentId, 'undo_out')
+                      }
+                      disabled={clockingId !== null}
+                      style={{
+                        background: 'white',
+                        color: '#991b1b',
+                        border: '1px solid #fecaca',
+                        padding: '9px 12px',
+                        borderRadius: 8,
+                        cursor: clockingId === null ? 'pointer' : 'default',
+                        fontWeight: 800,
+                      }}
+                    >
+                      Undo clock out
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
