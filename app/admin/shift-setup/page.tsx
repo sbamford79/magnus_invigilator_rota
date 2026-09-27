@@ -116,6 +116,15 @@ function sessionLabel(session: SessionKey) {
   return session.charAt(0).toUpperCase() + session.slice(1);
 }
 
+function sessionFromStartTime(start: string): SessionKey {
+  const [hours, minutes] = (start || '00:00').split(':').map(Number);
+  const startMinutes = hours * 60 + minutes;
+
+  if (startMinutes >= 12 * 60 + 45) return 'afternoon';
+  if (startMinutes >= 11 * 60) return 'mid';
+  return 'morning';
+}
+
 export default function ShiftSetupPage() {
   const { currentSeason } = useContext(SeasonContext);
 
@@ -840,15 +849,7 @@ console.log('Raw date:', rawDate);
 
       const start = get(row, 'Start');
 
-      let sessionKey: SessionKey = 'morning';
-
-      const hour = parseInt(start.split(':')[0] || '0');
-
-      if (hour >= 13) {
-        sessionKey = 'afternoon';
-      } else if (hour >= 11) {
-        sessionKey = 'mid';
-      }
+      const sessionKey = sessionFromStartTime(start);
 
       const studentCount = Number(get(row, 'NoOfCands') || '0');
 
@@ -915,11 +916,24 @@ async function calculateRoomRequirements() {
     }
 
     const rowsBySession = new Map<string, typeof rooms>();
+    const importedDates = new Set<string>();
 
     for (const room of rooms) {
+      const correctedSessionKey = sessionFromStartTime(room.start_time);
+      importedDates.add(room.exam_date);
+
+      if (room.session_key !== correctedSessionKey) {
+        const { error: correctionError } = await supabase
+          .from('room_requirements')
+          .update({ session_key: correctedSessionKey })
+          .eq('id', room.id);
+
+        if (correctionError) throw new Error(correctionError.message);
+      }
+
       const sessionKeyName = JSON.stringify([
         room.exam_date,
-        room.session_key,
+        correctedSessionKey,
       ]);
       const currentRows = rowsBySession.get(sessionKeyName) ?? [];
       currentRows.push(room);
@@ -994,17 +1008,19 @@ async function calculateRoomRequirements() {
       sessionTotals.set(sessionKeyName, peakNeeded);
     }
 
-    for (const [key, total] of Array.from(sessionTotals.entries())) {
-      const [examDate, sessionKey] = JSON.parse(key) as string[];
-
+    for (const examDate of Array.from(importedDates)) {
       const day = days.find(d => d.date === examDate);
-
       if (!day) continue;
 
-      await updateSession(day.id, sessionKey as SessionKey, {
-        enabled: true,
-        needed: total,
-      });
+      for (const sessionKey of ['morning', 'mid', 'afternoon'] as SessionKey[]) {
+        const total =
+          sessionTotals.get(JSON.stringify([examDate, sessionKey])) ?? 0;
+
+        await updateSession(day.id, sessionKey, {
+          enabled: total > 0,
+          needed: total,
+        });
+      }
     }
 
     await loadDays();
