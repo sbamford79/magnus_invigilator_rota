@@ -914,48 +914,88 @@ async function calculateRoomRequirements() {
       return;
     }
 
-    const roomGroups = new Map<string, number>();
+    const rowsBySession = new Map<string, typeof rooms>();
 
     for (const room of rooms) {
-      const key = JSON.stringify([
+      const sessionKeyName = JSON.stringify([
         room.exam_date,
         room.session_key,
-        room.start_time,
-        room.room_name,
       ]);
-
-      const current = roomGroups.get(key) ?? 0;
-
-      roomGroups.set(
-        key,
-        current + (room.student_count ?? 0)
-      );
+      const currentRows = rowsBySession.get(sessionKeyName) ?? [];
+      currentRows.push(room);
+      rowsBySession.set(sessionKeyName, currentRows);
     }
 
     const sessionTotals = new Map<string, number>();
 
-    for (const [roomKey, studentTotal] of Array.from(roomGroups.entries())) {
-      const [examDate, sessionKey, , roomName] = JSON.parse(roomKey) as string[];
-      const rulesForRoom = roomStaffingRules[roomName] ?? staffingRules;
+    for (const [sessionKeyName, sessionRows] of Array.from(
+      rowsBySession.entries()
+    )) {
+      const toMinutes = (time: string) => {
+        const [hours, minutes] = (time || '00:00')
+          .split(':')
+          .map(Number);
+        return hours * 60 + minutes;
+      };
 
-      const invigilatorsNeeded = calculateInvigilatorsNeeded(
-        studentTotal,
-        rulesForRoom
+      const startTimes = Array.from(
+        new Set(sessionRows.map(room => toMinutes(room.start_time)))
       );
+      let peakNeeded = 0;
 
-      const sessionKeyName = `${examDate}_${sessionKey}`;
+      for (const checkpoint of startTimes) {
+        const cohortsByRoom = new Map<string, Map<string, number>>();
 
-      const current =
-        sessionTotals.get(sessionKeyName) ?? 0;
+        for (const room of sessionRows) {
+          const start = toMinutes(room.start_time);
+          const duration = Math.max(Number(room.duration_minutes) || 0, 1);
+          const end = start + duration;
 
-      sessionTotals.set(
-        sessionKeyName,
-        current + invigilatorsNeeded
-      );
+          if (start <= checkpoint && end > checkpoint) {
+            const roomName = String(room.room_name ?? '').trim();
+            const paperCode = String(room.paper_code ?? '').trim();
+            const examName = String(room.exam_name ?? '').trim();
+            const cohortKey =
+              paperCode.replace(/[\d\W_]+$/g, '').toLowerCase() ||
+              examName.replace(/\b(?:paper|p)\s*\d+.*$/i, '').toLowerCase() ||
+              `${paperCode}_${examName}`.toLowerCase();
+            const roomCohorts = cohortsByRoom.get(roomName) ?? new Map();
+
+            roomCohorts.set(
+              cohortKey,
+              Math.max(
+                roomCohorts.get(cohortKey) ?? 0,
+                Number(room.student_count) || 0
+              )
+            );
+            cohortsByRoom.set(roomName, roomCohorts);
+          }
+        }
+
+        let checkpointNeeded = 0;
+
+        for (const [roomName, roomCohorts] of Array.from(
+          cohortsByRoom.entries()
+        )) {
+          const studentTotal = Array.from(roomCohorts.values()).reduce(
+            (sum, count) => sum + count,
+            0
+          );
+          const rulesForRoom = roomStaffingRules[roomName] ?? staffingRules;
+          checkpointNeeded += calculateInvigilatorsNeeded(
+            studentTotal,
+            rulesForRoom
+          );
+        }
+
+        peakNeeded = Math.max(peakNeeded, checkpointNeeded);
+      }
+
+      sessionTotals.set(sessionKeyName, peakNeeded);
     }
 
     for (const [key, total] of Array.from(sessionTotals.entries())) {
-      const [examDate, sessionKey] = key.split('_');
+      const [examDate, sessionKey] = JSON.parse(key) as string[];
 
       const day = days.find(d => d.date === examDate);
 
