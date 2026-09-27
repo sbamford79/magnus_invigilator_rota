@@ -55,6 +55,23 @@ function toCalendarDateTime(dateStr: string, timeStr: string) {
   return `${date}T${time}`;
 }
 
+function formatWorkedDuration(clockInAt: string | null, clockOutAt: string | null) {
+  if (!clockInAt || !clockOutAt) return 'Not available';
+
+  const minutes = Math.max(
+    0,
+    Math.round(
+      (new Date(clockOutAt).getTime() - new Date(clockInAt).getTime()) / 60000
+    )
+  );
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+
+  if (hours === 0) return `${remainingMinutes} min`;
+  if (remainingMinutes === 0) return `${hours} hr${hours === 1 ? '' : 's'}`;
+  return `${hours} hr${hours === 1 ? '' : 's'} ${remainingMinutes} min`;
+}
+
 function previousEveningReminder(dateStr: string) {
   const reminder = new Date(`${dateStr}T19:00:00`);
   reminder.setDate(reminder.getDate() - 1);
@@ -471,7 +488,14 @@ export default function MyShiftsPage() {
                         <div style={{ marginBottom: 8 }}>
                           <strong>Session:</strong>{' '}
                           {formatSession(shift.session)} ({time.start}-
-                          {time.end})
+                          {time.end}){' '}
+                          <span style={{ color: '#4c1d95', fontWeight: 800 }}>
+                            · Hours worked:{' '}
+                            {formatWorkedDuration(
+                              shift.clockInAt,
+                              shift.clockOutAt
+                            )}
+                          </span>
                         </div>
 
                         <div
@@ -784,6 +808,20 @@ export default function MyShiftsPage() {
                                     minute: '2-digit',
                                   })
                                 : 'Not recorded'}
+                            </div>
+                            <div
+                              style={{
+                                color: '#4c1d95',
+                                marginTop: 5,
+                                fontSize: 13,
+                                fontWeight: 800,
+                              }}
+                            >
+                              Hours worked:{' '}
+                              {formatWorkedDuration(
+                                shift.clockInAt,
+                                shift.clockOutAt
+                              )}
                             </div>
                           </div>
                           <span

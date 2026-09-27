@@ -71,3 +71,62 @@ $$;
 
 revoke all on function public.clock_shift(uuid, text) from public;
 grant execute on function public.clock_shift(uuid, text) to authenticated;
+
+create or replace function public.set_shift_clock_times(
+  p_assignment_id uuid,
+  p_clock_in_at timestamptz,
+  p_clock_out_at timestamptz
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_today date := (now() at time zone 'Europe/London')::date;
+begin
+  if p_clock_in_at is null and p_clock_out_at is not null then
+    raise exception 'Enter a start time before adding a finish time';
+  end if;
+
+  if p_clock_in_at is not null
+    and (p_clock_in_at at time zone 'Europe/London')::date <> v_today then
+    raise exception 'The start time must be for today';
+  end if;
+
+  if p_clock_out_at is not null
+    and (p_clock_out_at at time zone 'Europe/London')::date <> v_today then
+    raise exception 'The finish time must be for today';
+  end if;
+
+  if p_clock_in_at is not null
+    and p_clock_out_at is not null
+    and p_clock_out_at < p_clock_in_at then
+    raise exception 'The finish time cannot be before the start time';
+  end if;
+
+  update public.shift_assignments assignment
+  set clock_in_at = p_clock_in_at,
+      clock_out_at = p_clock_out_at
+  from public.invigilators invigilator,
+       public.shift_slots slot,
+       public.exam_days exam_day,
+       public.seasons season
+  where assignment.id = p_assignment_id
+    and invigilator.id = assignment.invigilator_id
+    and invigilator.auth_user_id = auth.uid()
+    and slot.id = assignment.shift_slot_id
+    and exam_day.id = slot.exam_day_id
+    and exam_day.exam_date = v_today
+    and season.id = exam_day.season_id
+    and season.status = 'active'
+    and assignment.published = true;
+
+  if not found then
+    raise exception 'These shift times can only be changed on the day';
+  end if;
+end;
+$$;
+
+revoke all on function public.set_shift_clock_times(uuid, timestamptz, timestamptz) from public;
+grant execute on function public.set_shift_clock_times(uuid, timestamptz, timestamptz) to authenticated;

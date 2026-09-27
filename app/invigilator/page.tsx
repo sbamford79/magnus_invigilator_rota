@@ -41,6 +41,15 @@ function formatClockTime(value: string | null) {
   });
 }
 
+function clockInputValue(value: string | null) {
+  if (!value) return '';
+  return new Date(value).toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
 const defaultNotices: Notice[] = [
   {
     id: 'mock-exams',
@@ -73,6 +82,10 @@ export default function InvigilatorHomePage() {
   const [todayShifts, setTodayShifts] = useState<TodayShift[]>([]);
   const [clockingId, setClockingId] = useState<string | null>(null);
   const [clockStatus, setClockStatus] = useState('');
+  const [editingClockId, setEditingClockId] = useState<string | null>(null);
+  const [editedClockTimes, setEditedClockTimes] = useState<
+    Record<string, { clockIn: string; clockOut: string }>
+  >({});
 
   useEffect(() => {
     loadInvigilator();
@@ -187,6 +200,54 @@ export default function InvigilatorHomePage() {
       setClockStatus(error.message);
     } else {
       setClockStatus(statusByAction[action][1]);
+      await loadInvigilator();
+    }
+
+    setClockingId(null);
+  }
+
+  function startEditingClock(shift: TodayShift) {
+    setEditedClockTimes(current => ({
+      ...current,
+      [shift.assignmentId]: {
+        clockIn: clockInputValue(shift.clockInAt),
+        clockOut: clockInputValue(shift.clockOutAt),
+      },
+    }));
+    setEditingClockId(shift.assignmentId);
+    setClockStatus('');
+  }
+
+  async function saveEditedClockTimes(assignmentId: string) {
+    const edited = editedClockTimes[assignmentId];
+    if (!edited?.clockIn && !edited?.clockOut) {
+      setClockStatus('Enter at least a start time.');
+      return;
+    }
+
+    if (!edited.clockIn && edited.clockOut) {
+      setClockStatus('Enter a start time before adding a finish time.');
+      return;
+    }
+
+    const today = toYMD(new Date());
+    const toTimestamp = (time: string) =>
+      time ? new Date(`${today}T${time}:00`).toISOString() : null;
+
+    setClockingId(assignmentId);
+    setClockStatus('Saving corrected times...');
+
+    const { error } = await supabase.rpc('set_shift_clock_times', {
+      p_assignment_id: assignmentId,
+      p_clock_in_at: toTimestamp(edited.clockIn),
+      p_clock_out_at: toTimestamp(edited.clockOut),
+    });
+
+    if (error) {
+      setClockStatus(error.message);
+    } else {
+      setClockStatus('Shift times updated.');
+      setEditingClockId(null);
       await loadInvigilator();
     }
 
@@ -383,7 +444,110 @@ export default function InvigilatorHomePage() {
                       Undo clock out
                     </button>
                   )}
+                  <button
+                    onClick={() => startEditingClock(shift)}
+                    disabled={clockingId !== null}
+                    style={{
+                      background: 'white',
+                      color: '#4c1d95',
+                      border: '1px solid #c4b5fd',
+                      padding: '9px 12px',
+                      borderRadius: 8,
+                      cursor: clockingId === null ? 'pointer' : 'default',
+                      fontWeight: 800,
+                    }}
+                  >
+                    Adjust times
+                  </button>
                 </div>
+
+                {editingClockId === shift.assignmentId && (
+                  <div
+                    style={{
+                      width: '100%',
+                      display: 'flex',
+                      alignItems: 'end',
+                      gap: 10,
+                      flexWrap: 'wrap',
+                      paddingTop: 12,
+                      borderTop: '1px solid #e5e7eb',
+                    }}
+                  >
+                    <label style={{ display: 'grid', gap: 5, fontWeight: 700 }}>
+                      Start time
+                      <input
+                        type="time"
+                        value={
+                          editedClockTimes[shift.assignmentId]?.clockIn ?? ''
+                        }
+                        onChange={event =>
+                          setEditedClockTimes(current => ({
+                            ...current,
+                            [shift.assignmentId]: {
+                              ...(current[shift.assignmentId] ?? {
+                                clockIn: '',
+                                clockOut: '',
+                              }),
+                              clockIn: event.target.value,
+                            },
+                          }))
+                        }
+                        style={{ padding: 8, borderRadius: 8, border: '1px solid #d1d5db' }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 5, fontWeight: 700 }}>
+                      Finish time
+                      <input
+                        type="time"
+                        value={
+                          editedClockTimes[shift.assignmentId]?.clockOut ?? ''
+                        }
+                        onChange={event =>
+                          setEditedClockTimes(current => ({
+                            ...current,
+                            [shift.assignmentId]: {
+                              ...(current[shift.assignmentId] ?? {
+                                clockIn: '',
+                                clockOut: '',
+                              }),
+                              clockOut: event.target.value,
+                            },
+                          }))
+                        }
+                        style={{ padding: 8, borderRadius: 8, border: '1px solid #d1d5db' }}
+                      />
+                    </label>
+                    <button
+                      onClick={() => saveEditedClockTimes(shift.assignmentId)}
+                      disabled={clockingId !== null}
+                      style={{
+                        background: '#4c1d95',
+                        color: 'white',
+                        border: 'none',
+                        padding: '9px 13px',
+                        borderRadius: 8,
+                        fontWeight: 800,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Save times
+                    </button>
+                    <button
+                      onClick={() => setEditingClockId(null)}
+                      style={{
+                        background: 'white',
+                        color: '#4b5563',
+                        border: '1px solid #d1d5db',
+                        padding: '9px 13px',
+                        borderRadius: 8,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
           </div>
