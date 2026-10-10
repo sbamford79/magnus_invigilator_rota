@@ -90,7 +90,7 @@ export default function ReportsPage() {
   const [status, setStatus] = useState('');
   const [ratioSort, setRatioSort] = useState<'lowest' | 'highest' | 'name'>('lowest');
   const [openReports, setOpenReports] = useState({
-    rota: true,
+    rota: false,
     attendance: false,
     ratio: false,
   });
@@ -152,8 +152,7 @@ export default function ReportsPage() {
       const { data: fetchedSlots, error: slotError } = await supabase
         .from('shift_slots')
         .select('id, exam_day_id, session_key')
-        .in('exam_day_id', dayIds)
-        .eq('published', true);
+        .in('exam_day_id', dayIds);
 
       if (slotError) {
         setStatus(slotError.message);
@@ -168,8 +167,7 @@ export default function ReportsPage() {
         const { data: fetchedAssignments, error: assignmentError } = await supabase
           .from('shift_assignments')
           .select('shift_slot_id, invigilator_id, attended')
-          .in('shift_slot_id', slotIds)
-          .eq('published', true);
+          .in('shift_slot_id', slotIds);
 
         if (assignmentError) {
           setStatus(assignmentError.message);
@@ -443,6 +441,20 @@ export default function ReportsPage() {
 
       <div style={{ marginBottom: 12, color: '#444' }}>
         Season: <strong>{currentSeason.name}</strong>
+      </div>
+
+      <div
+        style={{
+          marginBottom: 18,
+          padding: 12,
+          borderRadius: 8,
+          background: '#f5f3ff',
+          border: '1px solid #ddd6fe',
+          color: '#4c1d95',
+        }}
+      >
+        Admin preview: reports include saved shifts and assignments before they
+        are published to invigilators.
       </div>
 
       {status && (
