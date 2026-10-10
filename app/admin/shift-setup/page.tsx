@@ -28,6 +28,16 @@ type StaffingRules = {
 
 type RoomStaffingRules = Record<string, StaffingRules | null>;
 
+type ExtraShiftSlot = {
+  id: string;
+  examDayId: string;
+  sessionKey: string;
+  label: string;
+  startTime: string;
+  endTime: string;
+  needed: number;
+};
+
 const defaultStaffingRules: StaffingRules = {
   candidatesPerInvigilator: 30,
   additionalInvigilatorsPerRoom: 1,
@@ -116,6 +126,12 @@ function sessionLabel(session: SessionKey) {
   return session.charAt(0).toUpperCase() + session.slice(1);
 }
 
+const standardSessionTimes: Record<SessionKey, { start: string; end: string }> = {
+  morning: { start: '09:00', end: '11:30' },
+  mid: { start: '11:30', end: '13:00' },
+  afternoon: { start: '13:00', end: '15:30' },
+};
+
 function sessionFromStartTime(start: string): SessionKey {
   const [hours, minutes] = (start || '00:00').split(':').map(Number);
   const startMinutes = hours * 60 + minutes;
@@ -123,6 +139,26 @@ function sessionFromStartTime(start: string): SessionKey {
   if (startMinutes >= 12 * 60 + 45) return 'afternoon';
   if (startMinutes >= 11 * 60) return 'mid';
   return 'morning';
+}
+
+function timeToMinutes(time: string) {
+  const [hours, minutes] = (time || '00:00').split(':').map(Number);
+  return hours * 60 + minutes;
+}
+
+function minutesToTime(total: number) {
+  const hours = Math.floor(total / 60) % 24;
+  const minutes = Math.round(total % 60);
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+}
+
+function extraSessionKey(start: string) {
+  return `extra_${start.replace(':', '')}`;
+}
+
+function parseDurationMinutes(value: string) {
+  const match = String(value || '').match(/\d+/);
+  return match ? Number(match[0]) : 0;
 }
 
 export default function ShiftSetupPage() {
@@ -144,6 +180,7 @@ export default function ShiftSetupPage() {
   const [roomStaffingRules, setRoomStaffingRules] =
     useState<RoomStaffingRules>({});
   const [savingRoomRules, setSavingRoomRules] = useState(false);
+  const [extraShiftSlots, setExtraShiftSlots] = useState<ExtraShiftSlot[]>([]);
 
   useEffect(() => {
     if (currentSeason?.id) {
@@ -418,6 +455,32 @@ export default function ShiftSetupPage() {
       }
 
       sessionRows = data ?? [];
+
+      const { data: extraRows, error: extraError } = await supabase
+        .from('shift_slots')
+        .select('id, exam_day_id, session_key, display_label, start_time, end_time, needed')
+        .in('exam_day_id', dayIds)
+        .like('session_key', 'extra_%');
+
+      if (extraError) {
+        setStatus(extraError.message);
+        setLoading(false);
+        return;
+      }
+
+      setExtraShiftSlots(
+        (extraRows ?? []).map(row => ({
+          id: row.id,
+          examDayId: row.exam_day_id,
+          sessionKey: row.session_key,
+          label: row.display_label ?? `Extra session – ${String(row.start_time).slice(0, 5)}`,
+          startTime: String(row.start_time ?? '').slice(0, 5),
+          endTime: String(row.end_time ?? '').slice(0, 5),
+          needed: row.needed,
+        }))
+      );
+    } else {
+      setExtraShiftSlots([]);
     }
 
     const mappedDays: ExamDay[] = (dayRows ?? []).map(day => {
@@ -485,7 +548,12 @@ export default function ShiftSetupPage() {
     if (existingSlot?.id) {
       const { error: updateError } = await supabase
         .from('shift_slots')
-        .update({ needed: sessionData.needed })
+        .update({
+          needed: sessionData.needed,
+          start_time: standardSessionTimes[sessionKey].start,
+          end_time: standardSessionTimes[sessionKey].end,
+          display_label: sessionLabel(sessionKey),
+        })
         .eq('id', existingSlot.id);
 
       if (updateError) throw new Error(updateError.message);
@@ -495,10 +563,42 @@ export default function ShiftSetupPage() {
         session_key: sessionKey,
         needed: sessionData.needed,
         published: false,
+        start_time: standardSessionTimes[sessionKey].start,
+        end_time: standardSessionTimes[sessionKey].end,
+        display_label: sessionLabel(sessionKey),
       });
 
       if (insertError) throw new Error(insertError.message);
     }
+  }
+
+  function changeExtraNeeded(slotId: string, value: string) {
+    const numericValue = value.replace(/\D/g, '');
+    setExtraShiftSlots(current =>
+      current.map(slot =>
+        slot.id === slotId
+          ? { ...slot, needed: numericValue === '' ? 0 : Number(numericValue) }
+          : slot
+      )
+    );
+  }
+
+  async function saveExtraNeeded(slotId: string) {
+    const slot = extraShiftSlots.find(item => item.id === slotId);
+    if (!slot || slot.needed < 1) {
+      setStatus('Additional session staffing must be at least 1.');
+      await loadDays();
+      return;
+    }
+
+    setStatus('Saving additional session...');
+    const { error } = await supabase
+      .from('shift_slots')
+      .update({ needed: slot.needed })
+      .eq('id', slotId);
+
+    setStatus(error ? error.message : 'Additional session saved.');
+    if (error) await loadDays();
   }
 
   async function openPrivateAssignments() {
@@ -825,6 +925,27 @@ async function uploadRoomRequirements(
       return index >= 0 ? row[index]?.replace(/"/g, '') ?? '' : '';
     };
 
+    const parsedRows = dataRows.map(rowText =>
+      rowText.split(',').map(cell => cell.replace(/"/g, '').trim())
+    );
+    const alternativeStarts = Array.from(
+      new Set(
+        parsedRows
+          .map(row => get(row, 'Start'))
+          .filter(start => {
+            const minutes = timeToMinutes(start);
+            return minutes >= 9 * 60 + 30 && minutes < 11 * 60;
+          })
+      )
+    ).sort();
+    const acceptedExtraStarts = new Set(
+      alternativeStarts.filter(start =>
+        window.confirm(
+          `A ${start} start was found. Create an additional ${start} session?`
+        )
+      )
+    );
+
     await supabase
       .from('room_requirements')
       .delete()
@@ -832,8 +953,7 @@ async function uploadRoomRequirements(
 
     const inserts = [];
 
-    for (const rowText of dataRows) {
-      const row = rowText.split(',').map(cell => cell.replace(/"/g, '').trim());
+    for (const row of parsedRows) {
 
       const rawDate = get(row, 'Date');
 console.log('Room CSV row:', row);
@@ -849,7 +969,9 @@ console.log('Raw date:', rawDate);
 
       const start = get(row, 'Start');
 
-      const sessionKey = sessionFromStartTime(start);
+      const sessionKey = acceptedExtraStarts.has(start)
+        ? extraSessionKey(start)
+        : sessionFromStartTime(start);
 
       const studentCount = Number(get(row, 'NoOfCands') || '0');
 
@@ -869,7 +991,9 @@ console.log('Raw date:', rawDate);
         exam_name: get(row, 'ComponentLocalName'),
         paper_code: get(row, 'ComponentCode'),
         student_count: studentCount,
-        duration_minutes: Number(get(row, 'Length') || get(row, 'Length1') || '0'),
+        duration_minutes: parseDurationMinutes(
+          get(row, 'Length') || get(row, 'Length1') || '0'
+        ),
         suggested_invigilators: suggestedInvigilators,
       });
     }
@@ -919,7 +1043,9 @@ async function calculateRoomRequirements() {
     const importedDates = new Set<string>();
 
     for (const room of rooms) {
-      const correctedSessionKey = sessionFromStartTime(room.start_time);
+      const correctedSessionKey = String(room.session_key).startsWith('extra_')
+        ? room.session_key
+        : sessionFromStartTime(room.start_time);
       importedDates.add(room.exam_date);
 
       if (room.session_key !== correctedSessionKey) {
@@ -1020,6 +1146,41 @@ async function calculateRoomRequirements() {
           enabled: total > 0,
           needed: total,
         });
+      }
+
+      const extraEntries = Array.from(sessionTotals.entries()).filter(
+        ([key]) => {
+          const [entryDate, entrySession] = JSON.parse(key) as string[];
+          return entryDate === examDate && entrySession.startsWith('extra_');
+        }
+      );
+
+      for (const [key, total] of extraEntries) {
+        const [, sessionKey] = JSON.parse(key) as string[];
+        const sessionRows = rowsBySession.get(key) ?? [];
+        const startTime = String(sessionRows[0]?.start_time ?? '').slice(0, 5);
+        const endMinutes = Math.max(
+          ...sessionRows.map(room =>
+            timeToMinutes(room.start_time) +
+            Math.ceil(Math.max(Number(room.duration_minutes) || 0, 60) * 1.25)
+          )
+        );
+        const endTime = minutesToTime(endMinutes);
+
+        const { error: extraError } = await supabase.from('shift_slots').upsert(
+          {
+            exam_day_id: day.id,
+            session_key: sessionKey,
+            needed: total,
+            published: false,
+            start_time: startTime,
+            end_time: endTime,
+            display_label: `Extra session – ${startTime}`,
+          },
+          { onConflict: 'exam_day_id,session_key' }
+        );
+
+        if (extraError) throw new Error(extraError.message);
       }
     }
 
@@ -1586,6 +1747,51 @@ async function calculateRoomRequirements() {
                   );
                 })}
               </div>
+
+              {extraShiftSlots.some(slot => slot.examDayId === day.id) && (
+                <div style={{ marginTop: 14, display: 'grid', gap: 10 }}>
+                  <strong style={{ color: '#4c1d95' }}>Additional sessions</strong>
+                  {extraShiftSlots
+                    .filter(slot => slot.examDayId === day.id)
+                    .sort((a, b) => a.startTime.localeCompare(b.startTime))
+                    .map(slot => (
+                      <div
+                        key={slot.id}
+                        style={{
+                          ...sessionCard,
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          gap: 12,
+                          flexWrap: 'wrap',
+                        }}
+                      >
+                        <div>
+                          <strong>{slot.label}</strong>
+                          <div style={{ color: '#6b7280', marginTop: 4 }}>
+                            {slot.startTime}–{slot.endTime}
+                          </div>
+                        </div>
+                        <label style={neededLine}>
+                          <span>Needed</span>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={slot.needed === 0 ? '' : String(slot.needed)}
+                            onChange={event =>
+                              changeExtraNeeded(slot.id, event.target.value)
+                            }
+                            onBlur={() => saveExtraNeeded(slot.id)}
+                            onKeyDown={event => {
+                              if (event.key === 'Enter') event.currentTarget.blur();
+                            }}
+                            style={numberInput}
+                          />
+                        </label>
+                      </div>
+                    ))}
+                </div>
+              )}
             </div>
           ))
         )}

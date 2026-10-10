@@ -22,14 +22,18 @@ type ShiftNotification = {
 
 type TodayShift = {
   assignmentId: string;
-  session: 'morning' | 'mid' | 'afternoon';
+  session: string;
+  displayLabel: string;
+  startTime: string;
   label: string;
   clockInAt: string | null;
   clockOutAt: string | null;
 };
 
 function formatSession(session: TodayShift['session']) {
+  if (!session) return 'Session';
   if (session === 'mid') return 'Mid';
+  if (session.startsWith('extra_')) return 'Additional session';
   return session.charAt(0).toUpperCase() + session.slice(1);
 }
 
@@ -126,6 +130,8 @@ export default function InvigilatorHomePage() {
         clock_out_at,
         shift_slots (
           session_key,
+          display_label,
+          start_time,
           exam_days (
             season_id,
             exam_date,
@@ -143,6 +149,10 @@ export default function InvigilatorHomePage() {
       .map((assignment: any) => ({
         assignmentId: assignment.id,
         session: assignment.shift_slots?.session_key,
+        displayLabel:
+          assignment.shift_slots?.display_label ??
+          formatSession(assignment.shift_slots?.session_key),
+        startTime: String(assignment.shift_slots?.start_time ?? '').slice(0, 5),
         label: assignment.shift_slots?.exam_days?.label,
         date: assignment.shift_slots?.exam_days?.exam_date,
         seasonId: assignment.shift_slots?.exam_days?.season_id,
@@ -153,15 +163,15 @@ export default function InvigilatorHomePage() {
         shift =>
           shift.date === today &&
           activeSeasonIds.has(shift.seasonId) &&
-          (shift.session === 'morning' ||
-            shift.session === 'mid' ||
-            shift.session === 'afternoon')
+          Boolean(shift.session)
       )
-      .sort(
-        (a, b) =>
-          sessionOrder[a.session as keyof typeof sessionOrder] -
-          sessionOrder[b.session as keyof typeof sessionOrder]
-      ) as TodayShift[];
+      .sort((a, b) => {
+        if (a.startTime && b.startTime) return a.startTime.localeCompare(b.startTime);
+        return (
+          (sessionOrder[a.session as keyof typeof sessionOrder] ?? 99) -
+          (sessionOrder[b.session as keyof typeof sessionOrder] ?? 99)
+        );
+      }) as TodayShift[];
 
     setTodayShifts(mappedTodayShifts);
 
@@ -341,7 +351,7 @@ export default function InvigilatorHomePage() {
                 <div>
                   <strong style={{ color: '#1f2937' }}>{shift.label}</strong>
                   <div style={{ marginTop: 4, color: '#6b7280' }}>
-                    {formatSession(shift.session)}
+                    {shift.displayLabel}
                   </div>
                   <div
                     style={{

@@ -4,14 +4,15 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { isTodayOrFuture } from '../../../lib/dateHelpers';
 
-type SessionKey = 'morning' | 'mid' | 'afternoon';
-
 type AvailableShift = {
   shiftSlotId: string;
   examDayId: string;
   date: string;
   label: string;
-  session: SessionKey;
+  session: string;
+  displayLabel: string;
+  startTime: string;
+  endTime: string;
   needed: number;
   applied: boolean;
   assignedCount: number;
@@ -23,19 +24,31 @@ type ShiftGroup = {
   shifts: AvailableShift[];
 };
 
-function formatSessionLabel(session: SessionKey) {
+function formatSessionLabel(session: string) {
   if (session === 'mid') return 'Mid';
+  if (session.startsWith('extra_')) return 'Additional session';
   return session.charAt(0).toUpperCase() + session.slice(1);
 }
 
-const sessionOrder: Record<SessionKey, number> = {
+const sessionOrder: Record<string, number> = {
   morning: 1,
   mid: 2,
   afternoon: 3,
 };
 
-function getShiftKey(date: string, session: string) {
-  return `${date}__${session}`;
+function fallbackTimes(session: string) {
+  if (session === 'morning') return { start: '09:00', end: '11:30' };
+  if (session === 'mid') return { start: '11:30', end: '13:00' };
+  return { start: '13:00', end: '15:30' };
+}
+
+function shiftsOverlap(
+  first: { date: string; startTime: string; endTime: string },
+  second: { date: string; startTime: string; endTime: string }
+) {
+  return first.date === second.date &&
+    first.startTime < second.endTime &&
+    second.startTime < first.endTime;
 }
 
 export default function AvailableShiftsPage() {
@@ -81,6 +94,9 @@ export default function AvailableShiftsPage() {
         id,
         exam_day_id,
         session_key,
+        display_label,
+        start_time,
+        end_time,
         needed,
         published,
         exam_days (
@@ -113,6 +129,8 @@ export default function AvailableShiftsPage() {
         shift_slot_id,
         shift_slots (
           session_key,
+          start_time,
+          end_time,
           exam_days (
             exam_date
           )
@@ -137,6 +155,8 @@ export default function AvailableShiftsPage() {
           shift_slot_id,
           shift_slots (
             session_key,
+            start_time,
+            end_time,
             exam_days (
               exam_date
             )
@@ -156,23 +176,33 @@ export default function AvailableShiftsPage() {
       (invigilatorAssignmentRows ?? []).map(row => row.shift_slot_id)
     );
 
-    const occupiedShiftKeys = new Set<string>();
+    const occupiedIntervals: Array<{ date: string; startTime: string; endTime: string }> = [];
 
     (applicationRows ?? []).forEach((row: any) => {
       const date = row.shift_slots?.exam_days?.exam_date;
       const session = row.shift_slots?.session_key;
+      const fallback = fallbackTimes(session);
 
       if (date && session) {
-        occupiedShiftKeys.add(getShiftKey(date, session));
+        occupiedIntervals.push({
+          date,
+          startTime: String(row.shift_slots?.start_time ?? fallback.start).slice(0, 5),
+          endTime: String(row.shift_slots?.end_time ?? fallback.end).slice(0, 5),
+        });
       }
     });
 
     (invigilatorAssignmentRows ?? []).forEach((row: any) => {
       const date = row.shift_slots?.exam_days?.exam_date;
       const session = row.shift_slots?.session_key;
+      const fallback = fallbackTimes(session);
 
       if (date && session) {
-        occupiedShiftKeys.add(getShiftKey(date, session));
+        occupiedIntervals.push({
+          date,
+          startTime: String(row.shift_slots?.start_time ?? fallback.start).slice(0, 5),
+          endTime: String(row.shift_slots?.end_time ?? fallback.end).slice(0, 5),
+        });
       }
     });
 
@@ -198,6 +228,7 @@ export default function AvailableShiftsPage() {
     const mappedShifts: AvailableShift[] = (slots as any[])
       .map(slot => {
         const assignedCount = assignedCountByShift[slot.id] ?? 0;
+        const fallback = fallbackTimes(slot.session_key);
 
         return {
           shiftSlotId: slot.id,
@@ -205,6 +236,9 @@ export default function AvailableShiftsPage() {
           date: slot.exam_days?.exam_date ?? '',
           label: slot.exam_days?.label ?? 'Unknown date',
           session: slot.session_key,
+          displayLabel: slot.display_label ?? formatSessionLabel(slot.session_key),
+          startTime: String(slot.start_time ?? fallback.start).slice(0, 5),
+          endTime: String(slot.end_time ?? fallback.end).slice(0, 5),
           needed: slot.needed,
           applied: appliedShiftIds.has(slot.id),
           assignedCount,
@@ -215,8 +249,8 @@ export default function AvailableShiftsPage() {
         const hasAppliedForThisShift = appliedShiftIds.has(shift.shiftSlotId);
         const alreadyAssignedToThisPerson =
           assignedShiftIdsForThisInvigilator.has(shift.shiftSlotId);
-        const alreadyBusyAtThisTime = occupiedShiftKeys.has(
-          getShiftKey(shift.date, shift.session)
+        const alreadyBusyAtThisTime = occupiedIntervals.some(interval =>
+          shiftsOverlap(shift, interval)
         );
 
         return (
@@ -228,7 +262,7 @@ export default function AvailableShiftsPage() {
       })
       .sort((a, b) => {
         if (a.date !== b.date) return a.date.localeCompare(b.date);
-        return (sessionOrder[a.session] ?? 99) - (sessionOrder[b.session] ?? 99);
+        return a.startTime.localeCompare(b.startTime);
       });
 
     setShifts(mappedShifts);
@@ -277,6 +311,8 @@ export default function AvailableShiftsPage() {
             shift_slot_id,
             shift_slots (
               session_key,
+              start_time,
+              end_time,
               exam_days (
                 exam_date
               )
@@ -299,6 +335,8 @@ export default function AvailableShiftsPage() {
             shift_slot_id,
             shift_slots (
               session_key,
+              start_time,
+              end_time,
               exam_days (
                 exam_date
               )
@@ -318,25 +356,27 @@ export default function AvailableShiftsPage() {
         (existingApplications ?? []).some((row: any) => {
           const date = row.shift_slots?.exam_days?.exam_date;
           const session = row.shift_slots?.session_key;
-
-          return (
-            date === shift.date &&
-            session === shift.session
-          );
+          const fallback = fallbackTimes(session);
+          return shiftsOverlap(shift, {
+            date,
+            startTime: String(row.shift_slots?.start_time ?? fallback.start).slice(0, 5),
+            endTime: String(row.shift_slots?.end_time ?? fallback.end).slice(0, 5),
+          });
         }) ||
         (existingAssignments ?? []).some((row: any) => {
           const date = row.shift_slots?.exam_days?.exam_date;
           const session = row.shift_slots?.session_key;
-
-          return (
-            date === shift.date &&
-            session === shift.session
-          );
+          const fallback = fallbackTimes(session);
+          return shiftsOverlap(shift, {
+            date,
+            startTime: String(row.shift_slots?.start_time ?? fallback.start).slice(0, 5),
+            endTime: String(row.shift_slots?.end_time ?? fallback.end).slice(0, 5),
+          });
         });
 
       if (hasClashingShift) {
         setStatus(
-          'You already have an application or assignment for this date and session.'
+          'This shift overlaps another shift you have applied for or been assigned.'
         );
         await loadShifts();
         return;
@@ -470,7 +510,7 @@ export default function AvailableShiftsPage() {
                   >
                     <div style={{ marginBottom: 6, color: '#333' }}>
                       <strong>Session:</strong>{' '}
-                      {formatSessionLabel(shift.session)}
+                      {shift.displayLabel} ({shift.startTime}–{shift.endTime})
                     </div>
 
                     <div style={{ marginBottom: 6, color: '#333' }}>

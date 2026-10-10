@@ -12,6 +12,9 @@ type Shift = {
   label: string;
   date: string;
   visibleToInvigilators: boolean;
+  displayLabel: string;
+  startTime: string | null;
+  endTime: string | null;
 };
 
 type Invigilator = {
@@ -34,6 +37,7 @@ const sessionOrder: Record<string, number> = {
 
 function formatSessionLabel(session: string) {
   if (session === 'mid') return 'Mid';
+  if (session.startsWith('extra_')) return 'Additional session';
   return session.charAt(0).toUpperCase() + session.slice(1);
 }
 
@@ -99,6 +103,9 @@ export default function AssignInvigilatorsPage() {
         id,
         needed,
         session_key,
+        display_label,
+        start_time,
+        end_time,
         published,
         exam_days (
           label,
@@ -121,10 +128,15 @@ export default function AssignInvigilatorsPage() {
         label: slot.exam_days?.label ?? 'Unknown date',
         date: slot.exam_days?.exam_date ?? '',
         visibleToInvigilators: slot.published === true,
+        displayLabel: slot.display_label ?? formatSessionLabel(slot.session_key),
+        startTime: slot.start_time ? String(slot.start_time).slice(0, 5) : null,
+        endTime: slot.end_time ? String(slot.end_time).slice(0, 5) : null,
       }));
 
     mappedShifts.sort((a, b) => {
       if (a.date !== b.date) return a.date.localeCompare(b.date);
+      const timeCompare = (a.startTime ?? '').localeCompare(b.startTime ?? '');
+      if (timeCompare !== 0) return timeCompare;
       return (sessionOrder[a.session] ?? 99) - (sessionOrder[b.session] ?? 99);
     });
 
@@ -541,7 +553,11 @@ export default function AssignInvigilatorsPage() {
                 }}
               >
                 <h3 style={{ marginTop: 0, color: '#4c1d95' }}>
-                  {shift.label} - {formatSessionLabel(shift.session)} (
+                  {shift.label} - {shift.displayLabel}
+                  {shift.startTime && shift.endTime
+                    ? ` (${shift.startTime}–${shift.endTime})`
+                    : ''}{' '}
+                  (
                   {assignedCount}/{shift.needed} assigned)
                 </h3>
 

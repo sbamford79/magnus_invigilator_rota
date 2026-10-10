@@ -11,7 +11,7 @@ import {
   toYMD,
 } from '../../../lib/dateHelpers';
 
-type SessionKey = 'morning' | 'mid' | 'afternoon';
+type SessionKey = string;
 
 type MyShift = {
   assignmentId: string;
@@ -24,6 +24,9 @@ type MyShift = {
   isActiveSeason: boolean;
   clockInAt: string | null;
   clockOutAt: string | null;
+  displayLabel: string;
+  startTime: string;
+  endTime: string;
 };
 
 type ShiftGroup = {
@@ -33,17 +36,19 @@ type ShiftGroup = {
 };
 
 function formatSession(session: SessionKey) {
+  if (!session) return 'Session';
   if (session === 'mid') return 'Mid';
+  if (session.startsWith('extra_')) return 'Additional session';
   return session.charAt(0).toUpperCase() + session.slice(1);
 }
 
-const sessionOrder: Record<SessionKey, number> = {
+const sessionOrder: Record<string, number> = {
   morning: 1,
   mid: 2,
   afternoon: 3,
 };
 
-const sessionTimes: Record<SessionKey, { start: string; end: string }> = {
+const sessionTimes: Record<string, { start: string; end: string }> = {
   morning: { start: '09:00', end: '11:30' },
   mid: { start: '11:30', end: '13:00' },
   afternoon: { start: '13:00', end: '15:30' },
@@ -88,8 +93,8 @@ function escapeCalendarText(text: string) {
 }
 
 function addShiftToCalendar(shift: MyShift) {
-  const time = sessionTimes[shift.session];
-  const sessionName = formatSession(shift.session);
+  const time = { start: shift.startTime, end: shift.endTime };
+  const sessionName = shift.displayLabel;
 
   const title = `Magnus Invigilation - ${sessionName}`;
   const description = `${shift.label} - ${sessionName} session`;
@@ -194,6 +199,9 @@ export default function MyShiftsPage() {
         clock_out_at,
         shift_slots (
           session_key,
+          display_label,
+          start_time,
+          end_time,
           exam_days (
             season_id,
             exam_date,
@@ -215,6 +223,14 @@ export default function MyShiftsPage() {
         shiftSlotId: row.shift_slot_id,
         seasonId: row.shift_slots?.exam_days?.season_id,
         session: row.shift_slots?.session_key,
+        displayLabel:
+          row.shift_slots?.display_label ?? formatSession(row.shift_slots?.session_key),
+        startTime: String(
+          row.shift_slots?.start_time ?? sessionTimes[row.shift_slots?.session_key]?.start ?? '09:00'
+        ).slice(0, 5),
+        endTime: String(
+          row.shift_slots?.end_time ?? sessionTimes[row.shift_slots?.session_key]?.end ?? '11:30'
+        ).slice(0, 5),
         date: row.shift_slots?.exam_days?.exam_date,
         label: row.shift_slots?.exam_days?.label,
         attended: row.attended === true,
@@ -475,7 +491,7 @@ export default function MyShiftsPage() {
 
                 <div style={{ display: 'grid', gap: 14 }}>
                   {group.shifts.map(shift => {
-                    const time = sessionTimes[shift.session];
+                    const time = { start: shift.startTime, end: shift.endTime };
 
                     return (
                       <div
@@ -487,7 +503,7 @@ export default function MyShiftsPage() {
                       >
                         <div style={{ marginBottom: 8 }}>
                           <strong>Session:</strong>{' '}
-                          {formatSession(shift.session)} ({time.start}-
+                          {shift.displayLabel} ({time.start}-
                           {time.end}){' '}
                           <span style={{ color: '#4c1d95', fontWeight: 800 }}>
                             · Hours worked:{' '}
@@ -779,9 +795,8 @@ export default function MyShiftsPage() {
                                 fontSize: 14,
                               }}
                             >
-                              {formatSession(shift.session)} ·{' '}
-                              {sessionTimes[shift.session].start}–
-                              {sessionTimes[shift.session].end}
+                              {shift.displayLabel} · {shift.startTime}–
+                              {shift.endTime}
                             </div>
                             <div
                               style={{
