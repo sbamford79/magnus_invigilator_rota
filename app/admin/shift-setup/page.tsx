@@ -181,6 +181,11 @@ export default function ShiftSetupPage() {
     useState<RoomStaffingRules>({});
   const [savingRoomRules, setSavingRoomRules] = useState(false);
   const [extraShiftSlots, setExtraShiftSlots] = useState<ExtraShiftSlot[]>([]);
+  const [pendingRoomUpload, setPendingRoomUpload] = useState<{
+    headers: string[];
+    rows: string[][];
+    alternativeStarts: string[];
+  } | null>(null);
 
   useEffect(() => {
     if (currentSeason?.id) {
@@ -891,61 +896,21 @@ export default function ShiftSetupPage() {
     }
   }
 
-async function uploadRoomRequirements(
-  event: React.ChangeEvent<HTMLInputElement>
+async function saveRoomRequirementRows(
+  headers: string[],
+  parsedRows: string[][],
+  acceptedExtraStarts: Set<string>
 ) {
   if (!currentSeason?.id) return;
+  const get = (row: string[], name: string) => {
+    const index = headers.indexOf(name);
+    return index >= 0 ? row[index]?.replace(/"/g, '') ?? '' : '';
+  };
 
-  const file = event.target.files?.[0];
-  if (!file) return;
+  setUploadingRooms(true);
+  setStatus('Uploading room requirements...');
 
   try {
-    setUploadingRooms(true);
-    setStatus('Uploading room requirements...');
-
-    const text = await file.text();
-
-    const rows = text
-  .replace(/^\uFEFF/, '')
-  .split(/\r?\n/)
-  .map(r => r.trim())
-  .filter(Boolean);
-
-    if (rows.length < 2) {
-      setStatus('CSV is empty.');
-      return;
-    }
-
-    const headers = rows[0].split(',').map(header => header.replace(/"/g, '').trim());
-
-    const dataRows = rows.slice(1);
-
-    const get = (row: string[], name: string) => {
-      const index = headers.indexOf(name);
-      return index >= 0 ? row[index]?.replace(/"/g, '') ?? '' : '';
-    };
-
-    const parsedRows = dataRows.map(rowText =>
-      rowText.split(',').map(cell => cell.replace(/"/g, '').trim())
-    );
-    const alternativeStarts = Array.from(
-      new Set(
-        parsedRows
-          .map(row => get(row, 'Start'))
-          .filter(start => {
-            const minutes = timeToMinutes(start);
-            return minutes >= 9 * 60 + 30 && minutes < 11 * 60;
-          })
-      )
-    ).sort();
-    const acceptedExtraStarts = new Set(
-      alternativeStarts.filter(start =>
-        window.confirm(
-          `A ${start} start was found. Create an additional ${start} session?`
-        )
-      )
-    );
-
     await supabase
       .from('room_requirements')
       .delete()
@@ -956,8 +921,6 @@ async function uploadRoomRequirements(
     for (const row of parsedRows) {
 
       const rawDate = get(row, 'Date');
-console.log('Room CSV row:', row);
-console.log('Raw date:', rawDate);
 
       const cleanDate = rawDate.split(' ')[0];
 
@@ -1008,6 +971,7 @@ console.log('Raw date:', rawDate);
     }
 
     await loadRoomStaffingRules();
+    setPendingRoomUpload(null);
     setStatus(`Uploaded ${inserts.length} room requirements.`);
   } catch (error) {
     setStatus(
@@ -1015,6 +979,56 @@ console.log('Raw date:', rawDate);
     );
   } finally {
     setUploadingRooms(false);
+  }
+}
+
+async function uploadRoomRequirements(
+  event: React.ChangeEvent<HTMLInputElement>
+) {
+  const file = event.target.files?.[0];
+  event.target.value = '';
+  if (!file) return;
+
+  try {
+    const text = await file.text();
+    const rows = text
+      .replace(/^\uFEFF/, '')
+      .split(/\r?\n/)
+      .map(row => row.trim())
+      .filter(Boolean);
+
+    if (rows.length < 2) {
+      setStatus('CSV is empty.');
+      return;
+    }
+
+    const headers = rows[0]
+      .split(',')
+      .map(header => header.replace(/"/g, '').trim());
+    const parsedRows = rows.slice(1).map(rowText =>
+      rowText.split(',').map(cell => cell.replace(/"/g, '').trim())
+    );
+    const startIndex = headers.indexOf('Start');
+    const alternativeStarts = Array.from(
+      new Set(
+        parsedRows
+          .map(row => (startIndex >= 0 ? row[startIndex] ?? '' : ''))
+          .filter(start => {
+            const minutes = timeToMinutes(start);
+            return minutes >= 9 * 60 + 30 && minutes < 11 * 60;
+          })
+      )
+    ).sort();
+
+    if (alternativeStarts.length > 0) {
+      setPendingRoomUpload({ headers, rows: parsedRows, alternativeStarts });
+      setStatus('Alternative start time found. Choose how to handle it below.');
+      return;
+    }
+
+    await saveRoomRequirementRows(headers, parsedRows, new Set());
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : 'Upload failed');
   }
 }
 
@@ -1264,6 +1278,64 @@ async function calculateRoomRequirements() {
     onChange={uploadRoomRequirements}
     disabled={uploadingRooms}
   />
+
+  {pendingRoomUpload && (
+    <div
+      style={{
+        marginTop: 16,
+        padding: 16,
+        borderRadius: 12,
+        border: '2px solid #c4b5fd',
+        background: '#f5f3ff',
+      }}
+    >
+      <strong style={{ color: '#4c1d95' }}>
+        Alternative start {pendingRoomUpload.alternativeStarts.length === 1 ? 'time' : 'times'} found
+      </strong>
+      <p style={{ margin: '8px 0 12px', color: '#374151' }}>
+        The timetable includes {pendingRoomUpload.alternativeStarts.join(', ')}.
+        Would you like to create {pendingRoomUpload.alternativeStarts.length === 1 ? 'an additional session' : 'additional sessions'}?
+      </p>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <button
+          onClick={() =>
+            saveRoomRequirementRows(
+              pendingRoomUpload.headers,
+              pendingRoomUpload.rows,
+              new Set(pendingRoomUpload.alternativeStarts)
+            )
+          }
+          style={primaryButton}
+          disabled={uploadingRooms}
+        >
+          Yes, create extra {pendingRoomUpload.alternativeStarts.length === 1 ? 'session' : 'sessions'}
+        </button>
+        <button
+          onClick={() =>
+            saveRoomRequirementRows(
+              pendingRoomUpload.headers,
+              pendingRoomUpload.rows,
+              new Set()
+            )
+          }
+          style={secondaryButton}
+          disabled={uploadingRooms}
+        >
+          No, keep standard sessions
+        </button>
+        <button
+          onClick={() => {
+            setPendingRoomUpload(null);
+            setStatus('Upload cancelled.');
+          }}
+          style={secondaryButton}
+          disabled={uploadingRooms}
+        >
+          Cancel upload
+        </button>
+      </div>
+    </div>
+  )}
 
 <div style={{ marginTop: 14 }}>
   <button
