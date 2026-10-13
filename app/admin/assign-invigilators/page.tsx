@@ -546,10 +546,13 @@ export default function AssignInvigilatorsPage() {
                 style={{
                   background: 'white',
                   border:
-                    remaining > 0 ? '2px solid #fde68a' : '1px solid #e5e7eb',
+                    remaining > 0 ? '4px solid #dc2626' : '1px solid #e5e7eb',
                   padding: 20,
                   borderRadius: 16,
-                  boxShadow: '0 4px 14px rgba(0,0,0,0.06)',
+                  boxShadow:
+                    remaining > 0
+                      ? '0 4px 16px rgba(220,38,38,0.18)'
+                      : '0 4px 14px rgba(0,0,0,0.06)',
                 }}
               >
                 <h3 style={{ marginTop: 0, color: '#4c1d95' }}>
