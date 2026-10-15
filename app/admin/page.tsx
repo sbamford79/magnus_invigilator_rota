@@ -25,6 +25,8 @@ export default function AdminHomePage() {
   const [releaseNotifications, setReleaseNotifications] = useState<
     ShiftReleaseNotification[]
   >([]);
+  const [markingReadId, setMarkingReadId] = useState<string | null>(null);
+  const [notificationStatus, setNotificationStatus] = useState('');
 
   useEffect(() => {
     loadReleaseNotifications();
@@ -33,38 +35,89 @@ export default function AdminHomePage() {
   async function loadReleaseNotifications() {
     if (!currentSeason?.id) return;
 
-    const { data } = await supabase
+    const { data: authData } = await supabase.auth.getUser();
+    const adminUserId = authData.user?.id;
+
+    if (!adminUserId) return;
+
+    const { data, error: notificationError } = await supabase
       .from('shift_release_notifications')
       .select(
         'id, invigilator_name, exam_date, session_key, created_at, read_at'
       )
       .eq('season_id', currentSeason.id)
-      .order('created_at', { ascending: false })
-      .limit(20);
+      .order('created_at', { ascending: false });
 
-    setReleaseNotifications((data ?? []) as ShiftReleaseNotification[]);
+    if (notificationError) {
+      setNotificationStatus(notificationError.message);
+      return;
+    }
+
+    const notifications = (data ?? []) as ShiftReleaseNotification[];
+    const notificationIds = notifications.map(notification => notification.id);
+
+    if (notificationIds.length === 0) {
+      setReleaseNotifications([]);
+      return;
+    }
+
+    const { data: readRows, error: readsError } = await supabase
+      .from('shift_release_notification_reads')
+      .select('notification_id')
+      .eq('admin_user_id', adminUserId)
+      .in('notification_id', notificationIds);
+
+    if (readsError) {
+      setNotificationStatus(
+        'The per-admin read tracking needs to be enabled in Supabase.'
+      );
+      return;
+    }
+
+    const readIds = new Set(
+      (readRows ?? []).map(row => String(row.notification_id))
+    );
+
+    setReleaseNotifications(
+      notifications.filter(
+        notification => !notification.read_at && !readIds.has(notification.id)
+      )
+    );
+    setNotificationStatus('');
   }
 
   async function markNotificationRead(id: string) {
+    setMarkingReadId(id);
+    setNotificationStatus('');
+
+    const { data: authData } = await supabase.auth.getUser();
+    const adminUserId = authData.user?.id;
+
+    if (!adminUserId) {
+      setNotificationStatus('Please sign in again.');
+      setMarkingReadId(null);
+      return;
+    }
+
     const { error } = await supabase
-      .from('shift_release_notifications')
-      .update({ read_at: new Date().toISOString() })
-      .eq('id', id);
+      .from('shift_release_notification_reads')
+      .upsert(
+        { notification_id: id, admin_user_id: adminUserId },
+        { onConflict: 'notification_id,admin_user_id' }
+      );
 
     if (!error) {
       setReleaseNotifications(current =>
-        current.map(notification =>
-          notification.id === id
-            ? { ...notification, read_at: new Date().toISOString() }
-            : notification
-        )
+        current.filter(notification => notification.id !== id)
       );
+    } else {
+      setNotificationStatus(error.message);
     }
+
+    setMarkingReadId(null);
   }
 
-  const unreadCount = releaseNotifications.filter(
-    notification => !notification.read_at
-  ).length;
+  const unreadCount = releaseNotifications.length;
 
   return (
     <div style={{ padding: 24, maxWidth: 1100, margin: '0 auto' }}>
@@ -151,10 +204,8 @@ export default function AdminHomePage() {
                   flexWrap: 'wrap',
                   padding: 12,
                   borderRadius: 11,
-                  border: notification.read_at
-                    ? '1px solid #e5e7eb'
-                    : '1px solid #fcd34d',
-                  background: notification.read_at ? '#fafafa' : '#fffbeb',
+                  border: '1px solid #fcd34d',
+                  background: '#fffbeb',
                 }}
               >
                 <div>
@@ -174,25 +225,41 @@ export default function AdminHomePage() {
                   </div>
                 </div>
 
-                {!notification.read_at && (
-                  <button
-                    onClick={() => markNotificationRead(notification.id)}
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 7,
+                    color: '#4c1d95',
+                    fontWeight: 700,
+                    cursor:
+                      markingReadId === notification.id
+                        ? 'not-allowed'
+                        : 'pointer',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={false}
+                    disabled={markingReadId === notification.id}
+                    onChange={() => markNotificationRead(notification.id)}
                     style={{
-                      background: '#4c1d95',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: 8,
-                      padding: '7px 10px',
-                      cursor: 'pointer',
-                      fontWeight: 700,
+                      width: 18,
+                      height: 18,
+                      accentColor: '#4c1d95',
                     }}
-                  >
-                    Mark as read
-                  </button>
-                )}
+                  />
+                  {markingReadId === notification.id ? 'Clearing…' : 'Read'}
+                </label>
               </div>
             ))}
           </div>
+        )}
+
+        {notificationStatus && (
+          <p style={{ margin: '12px 0 0', color: '#b91c1c', fontWeight: 700 }}>
+            {notificationStatus}
+          </p>
         )}
       </section>
 
