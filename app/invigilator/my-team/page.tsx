@@ -89,7 +89,7 @@ export default function MyTeamPage() {
 
     // 5. Get MY published assignments for today's slots
     const { data: myAssignments, error: myAssignmentsError } = await supabase
-      .from('shift_assignments')
+      .from('published_shift_team')
       .select('id, shift_slot_id')
       .eq('invigilator_id', myInvigilatorId)
       .eq('published', true)
@@ -109,7 +109,7 @@ export default function MyTeamPage() {
 
     // 6. Get ALL published assignments on those same shifts
     const { data: teamAssignments, error: teamAssignmentsError } = await supabase
-      .from('shift_assignments')
+      .from('published_shift_team')
       .select('shift_slot_id, invigilator_id')
       .eq('published', true)
       .in('shift_slot_id', myShiftSlotIds);
@@ -130,7 +130,7 @@ export default function MyTeamPage() {
 
     // 7. Get invigilator names
     const { data: invigilators, error: invigilatorsError } = await supabase
-      .from('invigilators')
+      .from('invigilator_directory')
       .select('id, full_name')
       .in('id', allInvigilatorIds);
 

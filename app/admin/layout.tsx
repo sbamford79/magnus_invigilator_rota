@@ -34,14 +34,20 @@ export default function AdminLayout({
       return;
     }
 
-    const { data: invigilator } = await supabase
-      .from('invigilators')
-      .select('id')
+    const { data: adminUser } = await supabase
+      .from('admin_users')
+      .select('auth_user_id')
       .eq('auth_user_id', user.id)
       .maybeSingle();
 
-    if (invigilator) {
-      window.location.href = '/invigilator';
+    if (!adminUser) {
+      const { data: invigilator } = await supabase
+        .from('invigilators')
+        .select('id')
+        .eq('auth_user_id', user.id)
+        .maybeSingle();
+
+      window.location.href = invigilator ? '/invigilator' : '/login';
       return;
     }
 

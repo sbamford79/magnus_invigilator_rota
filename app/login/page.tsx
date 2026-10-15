@@ -28,18 +28,28 @@ export default function LoginPage() {
 
     const userId = data.session.user.id;
 
-    const { data: invigilator } = await supabase
-      .from('invigilators')
-      .select('id')
-      .eq('auth_user_id', userId)
-      .maybeSingle();
+    const [{ data: invigilator }, { data: adminUser }] = await Promise.all([
+      supabase
+        .from('invigilators')
+        .select('id')
+        .eq('auth_user_id', userId)
+        .maybeSingle(),
+      supabase
+        .from('admin_users')
+        .select('auth_user_id')
+        .eq('auth_user_id', userId)
+        .maybeSingle(),
+    ]);
 
     setStatus('Login successful');
 
     if (invigilator) {
       window.location.href = '/invigilator';
-    } else {
+    } else if (adminUser) {
       window.location.href = '/admin';
+    } else {
+      await supabase.auth.signOut();
+      setStatus('Your account has not been given access to this rota.');
     }
   }
 
