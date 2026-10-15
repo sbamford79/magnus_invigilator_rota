@@ -22,8 +22,37 @@ type ExamRow = {
   notes: string | null;
 };
 
+type RoomRequirementRow = {
+  season_id: string;
+  exam_date: string;
+  start_time: string | null;
+  room_name: string | null;
+  paper_code: string | null;
+  exam_name: string | null;
+};
+
+function cleanTime(value: string) {
+  const text = String(value ?? '').trim();
+  const match = text.match(/(\d{1,2}):(\d{2})/);
+
+  if (match) {
+    return `${match[1].padStart(2, '0')}:${match[2]}`;
+  }
+
+  return text;
+}
+
+function normaliseMatchValue(value: string | null | undefined) {
+  return String(value ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
 export default function InvigilatorExamTimetablePage() {
   const [exams, setExams] = useState<ExamRow[]>([]);
+  const [roomRequirements, setRoomRequirements] = useState<
+    RoomRequirementRow[]
+  >([]);
   const [status, setStatus] = useState('Loading timetable...');
   const [selectedDate, setSelectedDate] = useState(toYMD(new Date()));
   const [viewDate, setViewDate] = useState(() => {
@@ -55,20 +84,34 @@ if (activeSeasonIds.length === 0) {
   return;
 }
 
-const { data, error } = await supabase
-  .from('exam_timetable')
-  .select('*')
-  .in('season_id', activeSeasonIds)
-  .order('exam_date', { ascending: true })
-  .order('exam_time', { ascending: true });
+const [examResult, roomResult] = await Promise.all([
+  supabase
+    .from('exam_timetable')
+    .select('*')
+    .in('season_id', activeSeasonIds)
+    .order('exam_date', { ascending: true })
+    .order('exam_time', { ascending: true }),
+  supabase
+    .from('room_requirements')
+    .select('season_id, exam_date, start_time, room_name, paper_code, exam_name')
+    .in('season_id', activeSeasonIds),
+]);
 
-    if (error) {
-      setStatus(error.message);
+    if (examResult.error) {
+      setStatus(examResult.error.message);
       return;
     }
 
-    const loaded = (data ?? []) as ExamRow[];
+    if (roomResult.error) {
+      setStatus(roomResult.error.message);
+      return;
+    }
+
+    const loaded = (examResult.data ?? []) as ExamRow[];
     setExams(loaded);
+    setRoomRequirements(
+      (roomResult.data ?? []) as RoomRequirementRow[]
+    );
 
     setStatus('');
   }
@@ -84,6 +127,61 @@ const { data, error } = await supabase
     () => exams.filter(exam => exam.exam_date === selectedDate),
     [exams, selectedDate]
   );
+
+  function roomsForExam(exam: ExamRow) {
+    const examTime = cleanTime(exam.exam_time ?? '');
+    const examCode = normaliseMatchValue(exam.paper_code);
+    const examName = normaliseMatchValue(exam.notes);
+
+    const sameExamSlot = roomRequirements.filter(
+      room =>
+        room.season_id === exam.season_id &&
+        room.exam_date === exam.exam_date &&
+        cleanTime(room.start_time ?? '') === examTime
+    );
+
+    let matches = sameExamSlot.filter(room => {
+      const roomCode = normaliseMatchValue(room.paper_code);
+      const roomExamName = normaliseMatchValue(room.exam_name);
+      const codesMatch = Boolean(
+        examCode &&
+          roomCode &&
+          (examCode === roomCode ||
+            roomCode.startsWith(examCode) ||
+            examCode.startsWith(roomCode) ||
+            examName.includes(roomCode))
+      );
+      const namesMatch = Boolean(
+        examName &&
+          roomExamName &&
+          (examName === roomExamName ||
+            examName.includes(roomExamName) ||
+            roomExamName.includes(examName))
+      );
+
+      return codesMatch || namesMatch;
+    });
+
+    if (matches.length === 0) {
+      const distinctPapers = new Set(
+        sameExamSlot
+          .map(room => normaliseMatchValue(room.paper_code || room.exam_name))
+          .filter(Boolean)
+      );
+
+      if (distinctPapers.size === 1) {
+        matches = sameExamSlot;
+      }
+    }
+
+    return Array.from(
+      new Set(
+        matches
+          .map(room => room.room_name?.trim())
+          .filter((room): room is string => Boolean(room))
+      )
+    ).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  }
 
   const amCandidates = examsForSelectedDate
     .filter(exam => {
@@ -232,34 +330,45 @@ const { data, error } = await supabase
           <p style={muted}>No exams found for this date.</p>
         ) : (
           <div style={{ display: 'grid', gap: 12 }}>
-            {examsForSelectedDate.map(exam => (
-              <div key={exam.id} style={examRow}>
-                <div>
-                  <div style={examTitle}>
-                    {exam.exam_time || 'Time TBC'} -{' '}
-                    {exam.paper_code || 'Paper'}
-                  </div>
+            {examsForSelectedDate.map(exam => {
+              const rooms = roomsForExam(exam);
 
-                  <div style={examMeta}>
-                    {exam.exam_board || 'Board'} -{' '}
-                    {exam.exam_level || 'Level'}
-                  </div>
-
-                  {exam.notes && <div style={examNotes}>{exam.notes}</div>}
-
-                  {exam.duration_minutes !== null && (
-                    <div style={examMeta}>
-                      Duration: {exam.duration_minutes} minutes
+              return (
+                <div key={exam.id} style={examRow}>
+                  <div>
+                    <div style={examTitle}>
+                      {exam.exam_time || 'Time TBC'} -{' '}
+                      {exam.paper_code || 'Paper'}
                     </div>
-                  )}
-                </div>
 
-                <div style={studentBadge}>
-                  {exam.student_count ?? 0} candidate
-                  {(exam.student_count ?? 0) === 1 ? '' : 's'}
+                    <div style={examMeta}>
+                      {exam.exam_board || 'Board'} -{' '}
+                      {exam.exam_level || 'Level'}
+                    </div>
+
+                    {exam.notes && <div style={examNotes}>{exam.notes}</div>}
+
+                    {exam.duration_minutes !== null && (
+                      <div style={examMeta}>
+                        Duration: {exam.duration_minutes} minutes
+                      </div>
+                    )}
+
+                    {rooms.length > 0 && (
+                      <div style={examMeta}>
+                        <strong>Room{rooms.length === 1 ? '' : 's'}:</strong>{' '}
+                        {rooms.join(', ')}
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={studentBadge}>
+                    {exam.student_count ?? 0} candidate
+                    {(exam.student_count ?? 0) === 1 ? '' : 's'}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
