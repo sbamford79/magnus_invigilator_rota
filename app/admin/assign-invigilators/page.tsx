@@ -1,6 +1,6 @@
 'use client';
 
-import { useContext, useEffect, useState } from 'react';
+import { useContext, useEffect, useRef, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { SeasonContext } from '../SeasonContext';
 import { isPastDate } from '../../../lib/dateHelpers';
@@ -64,6 +64,8 @@ export default function AssignInvigilatorsPage() {
   const [manualPick, setManualPick] = useState<Record<string, string>>({});
   const [status, setStatus] = useState('');
   const [lastPublishedAt, setLastPublishedAt] = useState<string | null>(null);
+  const [pendingSaves, setPendingSaves] = useState(0);
+  const saveInProgressRef = useRef(false);
 
   useEffect(() => {
     loadData();
@@ -212,44 +214,81 @@ export default function AssignInvigilatorsPage() {
     shiftId: string,
     invigilatorIds: string[]
   ) {
-    const { error: deleteError } = await supabase
-      .from('shift_assignments')
-      .delete()
-      .eq('shift_slot_id', shiftId);
+    saveInProgressRef.current = true;
+    setPendingSaves(count => count + 1);
 
-    if (deleteError) {
-      setStatus(deleteError.message);
-      await loadData();
-      return;
-    }
-
-    if (invigilatorIds.length > 0) {
-      const { error: insertError } = await supabase
+    try {
+      const { data: existingRows, error: existingError } = await supabase
         .from('shift_assignments')
-        .insert(
-          invigilatorIds.map(id => ({
-            shift_slot_id: shiftId,
-            invigilator_id: id,
-            published: false,
-          }))
-        );
+        .select('id, invigilator_id')
+        .eq('shift_slot_id', shiftId);
 
-      if (insertError) {
-        setStatus(insertError.message);
+      if (existingError) {
+        setStatus(existingError.message);
         await loadData();
         return;
       }
+
+      const wantedIds = new Set(invigilatorIds);
+      const existingInvigilatorIds = new Set(
+        (existingRows ?? []).map(row => row.invigilator_id)
+      );
+      const assignmentIdsToRemove = (existingRows ?? [])
+        .filter(row => !wantedIds.has(row.invigilator_id))
+        .map(row => row.id);
+      const invigilatorIdsToAdd = invigilatorIds.filter(
+        id => !existingInvigilatorIds.has(id)
+      );
+
+      if (assignmentIdsToRemove.length > 0) {
+        const { error: deleteError } = await supabase
+          .from('shift_assignments')
+          .delete()
+          .in('id', assignmentIdsToRemove);
+
+        if (deleteError) {
+          setStatus(deleteError.message);
+          await loadData();
+          return;
+        }
+      }
+
+      if (invigilatorIdsToAdd.length > 0) {
+        const { error: insertError } = await supabase
+          .from('shift_assignments')
+          .insert(
+            invigilatorIdsToAdd.map(id => ({
+              shift_slot_id: shiftId,
+              invigilator_id: id,
+              published: false,
+            }))
+          );
+
+        if (insertError) {
+          setStatus(insertError.message);
+          await loadData();
+          return;
+        }
+      }
+
+      setAssigned(prev => ({
+        ...prev,
+        [shiftId]: invigilatorIds,
+      }));
+
+      setStatus('Assignments auto-saved');
+    } finally {
+      saveInProgressRef.current = false;
+      setPendingSaves(count => Math.max(0, count - 1));
     }
-
-    setAssigned(prev => ({
-      ...prev,
-      [shiftId]: invigilatorIds,
-    }));
-
-    setStatus('Assignments auto-saved');
   }
 
   async function toggle(shiftId: string, invigilatorId: string) {
+    if (saveInProgressRef.current) {
+      setStatus('Please wait for the current assignment change to finish saving.');
+      return;
+    }
+
     const current = selected[shiftId] ?? [];
     const exists = current.includes(invigilatorId);
     const shift = shifts.find(s => s.id === shiftId);
@@ -274,6 +313,11 @@ export default function AssignInvigilatorsPage() {
   }
 
   async function addManualInvigilator(shiftId: string) {
+    if (saveInProgressRef.current) {
+      setStatus('Please wait for the current assignment change to finish saving.');
+      return;
+    }
+
     const invigilatorId = manualPick[shiftId];
 
     if (!invigilatorId) {
@@ -315,6 +359,11 @@ export default function AssignInvigilatorsPage() {
     shiftId: string,
     invigilatorId: string
   ) {
+    if (saveInProgressRef.current) {
+      setStatus('Please wait for the current assignment change to finish saving.');
+      return;
+    }
+
     const current = selected[shiftId] ?? [];
     const updated = current.filter(id => id !== invigilatorId);
 
@@ -327,6 +376,11 @@ export default function AssignInvigilatorsPage() {
   }
 
   async function publishAll() {
+    if (saveInProgressRef.current || pendingSaves > 0) {
+      setStatus('Please wait for the current assignment changes to finish saving.');
+      return;
+    }
+
     setStatus('Publishing assignments...');
 
     const shiftSlotIds = shifts.map(shift => shift.id);
@@ -487,17 +541,19 @@ export default function AssignInvigilatorsPage() {
       >
         <button
           onClick={publishAll}
+          disabled={pendingSaves > 0}
           style={{
             background: '#4c1d95',
             color: 'white',
             border: 'none',
             padding: '10px 14px',
             borderRadius: 10,
-            cursor: 'pointer',
+            cursor: pendingSaves > 0 ? 'not-allowed' : 'pointer',
             fontWeight: 700,
+            opacity: pendingSaves > 0 ? 0.6 : 1,
           }}
         >
-          Publish assignments
+          {pendingSaves > 0 ? 'Saving assignments…' : 'Publish assignments'}
         </button>
 
         {status && (
@@ -618,7 +674,8 @@ export default function AssignInvigilatorsPage() {
                         const isChecked = selectedIds.includes(
                           app.invigilator_id
                         );
-                        const isDisabled = !isChecked && limitReached;
+                        const isDisabled =
+                          pendingSaves > 0 || (!isChecked && limitReached);
 
                         return (
                           <label
@@ -679,14 +736,17 @@ export default function AssignInvigilatorsPage() {
 
                           <button
                             onClick={() => removeManualInvigilator(shift.id, id)}
+                            disabled={pendingSaves > 0}
                             style={{
                               background: '#fee2e2',
                               color: '#991b1b',
                               border: '1px solid #fecaca',
                               borderRadius: 8,
                               padding: '5px 8px',
-                              cursor: 'pointer',
+                              cursor:
+                                pendingSaves > 0 ? 'not-allowed' : 'pointer',
                               fontWeight: 700,
+                              opacity: pendingSaves > 0 ? 0.6 : 1,
                             }}
                           >
                             Remove
@@ -711,6 +771,7 @@ export default function AssignInvigilatorsPage() {
 
                   <select
                     value={manualPick[shift.id] ?? ''}
+                    disabled={pendingSaves > 0}
                     onChange={e =>
                       setManualPick(prev => ({
                         ...prev,
@@ -736,14 +797,16 @@ export default function AssignInvigilatorsPage() {
 
                   <button
                     onClick={() => addManualInvigilator(shift.id)}
+                    disabled={pendingSaves > 0}
                     style={{
                       background: '#4c1d95',
                       color: 'white',
                       border: 'none',
                       padding: '9px 12px',
                       borderRadius: 8,
-                      cursor: 'pointer',
+                      cursor: pendingSaves > 0 ? 'not-allowed' : 'pointer',
                       fontWeight: 700,
+                      opacity: pendingSaves > 0 ? 0.6 : 1,
                     }}
                   >
                     Add
