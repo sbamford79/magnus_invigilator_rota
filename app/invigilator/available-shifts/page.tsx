@@ -36,6 +36,10 @@ const sessionOrder: Record<string, number> = {
   afternoon: 3,
 };
 
+type AppliedShift = AvailableShift & {
+  assigned: boolean;
+};
+
 function fallbackTimes(session: string) {
   if (session === 'morning') return { start: '09:00', end: '11:30' };
   if (session === 'mid') return { start: '11:30', end: '13:00' };
@@ -53,6 +57,7 @@ function shiftsOverlap(
 
 export default function AvailableShiftsPage() {
   const [shifts, setShifts] = useState<AvailableShift[]>([]);
+  const [appliedShifts, setAppliedShifts] = useState<AppliedShift[]>([]);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState('');
 
@@ -117,6 +122,7 @@ export default function AvailableShiftsPage() {
 
     if (slots.length === 0) {
       setShifts([]);
+      setAppliedShifts([]);
       setLoading(false);
       return;
     }
@@ -225,8 +231,7 @@ export default function AvailableShiftsPage() {
         (assignedCountByShift[row.shift_slot_id] ?? 0) + 1;
     });
 
-    const mappedShifts: AvailableShift[] = (slots as any[])
-      .map(slot => {
+    const allMappedShifts: AvailableShift[] = (slots as any[]).map(slot => {
         const assignedCount = assignedCountByShift[slot.id] ?? 0;
         const fallback = fallbackTimes(slot.session_key);
 
@@ -243,7 +248,24 @@ export default function AvailableShiftsPage() {
           applied: appliedShiftIds.has(slot.id),
           assignedCount,
         };
-      })
+      });
+
+    setAppliedShifts(
+      allMappedShifts
+        .filter(
+          shift => shift.applied && isTodayOrFuture(shift.date)
+        )
+        .map(shift => ({
+          ...shift,
+          assigned: assignedShiftIdsForThisInvigilator.has(shift.shiftSlotId),
+        }))
+        .sort((a, b) => {
+          if (a.date !== b.date) return a.date.localeCompare(b.date);
+          return a.startTime.localeCompare(b.startTime);
+        })
+    );
+
+    const mappedShifts = allMappedShifts
       .filter(shift => {
         const isFull = shift.assignedCount >= shift.needed;
         const hasAppliedForThisShift = appliedShiftIds.has(shift.shiftSlotId);
@@ -563,6 +585,82 @@ export default function AvailableShiftsPage() {
           ))}
         </div>
       )}
+
+      <section style={{ marginTop: 30 }}>
+        <div
+          style={{
+            background: 'white',
+            border: '1px solid #ddd6fe',
+            borderRadius: 16,
+            padding: 22,
+            boxShadow: '0 4px 14px rgba(0,0,0,0.06)',
+          }}
+        >
+          <h2 style={{ margin: 0, color: '#4c1d95', fontSize: 24 }}>
+            My Shift Applications
+          </h2>
+          <p style={{ color: '#555', marginTop: 8, marginBottom: 18 }}>
+            Untick an outstanding application if you are no longer available.
+            Assigned shifts are shown in grey and cannot be removed here.
+          </p>
+
+          {appliedShifts.length === 0 ? (
+            <p style={{ margin: 0, color: '#6b7280' }}>
+              You do not have any current shift applications.
+            </p>
+          ) : (
+            <div style={{ display: 'grid', gap: 12 }}>
+              {appliedShifts.map(shift => (
+                <div
+                  key={shift.shiftSlotId}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: 18,
+                    flexWrap: 'wrap',
+                    padding: 15,
+                    borderRadius: 12,
+                    border: shift.assigned
+                      ? '1px solid #d1d5db'
+                      : '1px solid #c4b5fd',
+                    background: shift.assigned ? '#f3f4f6' : '#faf5ff',
+                    color: shift.assigned ? '#6b7280' : '#374151',
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                      {shift.label}
+                    </div>
+                    <div>
+                      {shift.displayLabel} ({shift.startTime}–{shift.endTime})
+                    </div>
+                  </div>
+
+                  <label
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 9,
+                      fontWeight: 700,
+                      cursor: shift.assigned ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked
+                      disabled={shift.assigned}
+                      onChange={() => toggleApplication(shift)}
+                      style={{ transform: 'scale(1.1)' }}
+                    />
+                    {shift.assigned ? 'Assigned' : 'Applied'}
+                  </label>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
     </div>
   );
 }
