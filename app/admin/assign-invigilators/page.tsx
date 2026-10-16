@@ -53,6 +53,15 @@ function formatDateTime(dateStr: string | null) {
   });
 }
 
+function timeRangesOverlap(
+  firstStart: string,
+  firstEnd: string,
+  secondStart: string,
+  secondEnd: string
+) {
+  return firstStart < secondEnd && secondStart < firstEnd;
+}
+
 export default function AssignInvigilatorsPage() {
   const { currentSeason } = useContext(SeasonContext);
 
@@ -268,6 +277,80 @@ export default function AssignInvigilatorsPage() {
           setStatus(insertError.message);
           await loadData();
           return;
+        }
+
+        const assignedShift = shifts.find(shift => shift.id === shiftId);
+
+        if (
+          assignedShift?.date &&
+          assignedShift.startTime &&
+          assignedShift.endTime
+        ) {
+          const { data: applicationRows, error: applicationError } =
+            await supabase
+              .from('shift_applications')
+              .select(`
+                shift_slot_id,
+                invigilator_id,
+                shift_slots (
+                  start_time,
+                  end_time,
+                  exam_days (
+                    exam_date
+                  )
+                )
+              `)
+              .in('invigilator_id', invigilatorIdsToAdd)
+              .neq('shift_slot_id', shiftId);
+
+          if (applicationError) {
+            setStatus(
+              `Assignments saved, but conflicting applications could not be checked: ${applicationError.message}`
+            );
+            await loadData();
+            return;
+          }
+
+          const conflictingApplications = (applicationRows ?? []).filter(
+            (row: any) => {
+              const applicationDate =
+                row.shift_slots?.exam_days?.exam_date;
+              const applicationStart = row.shift_slots?.start_time
+                ? String(row.shift_slots.start_time).slice(0, 5)
+                : null;
+              const applicationEnd = row.shift_slots?.end_time
+                ? String(row.shift_slots.end_time).slice(0, 5)
+                : null;
+
+              return (
+                applicationDate === assignedShift.date &&
+                applicationStart &&
+                applicationEnd &&
+                timeRangesOverlap(
+                  assignedShift.startTime!,
+                  assignedShift.endTime!,
+                  applicationStart,
+                  applicationEnd
+                )
+              );
+            }
+          );
+
+          for (const application of conflictingApplications) {
+            const { error: deleteApplicationError } = await supabase
+              .from('shift_applications')
+              .delete()
+              .eq('shift_slot_id', application.shift_slot_id)
+              .eq('invigilator_id', application.invigilator_id);
+
+            if (deleteApplicationError) {
+              setStatus(
+                `Assignments saved, but a conflicting application could not be removed: ${deleteApplicationError.message}`
+              );
+              await loadData();
+              return;
+            }
+          }
         }
       }
 

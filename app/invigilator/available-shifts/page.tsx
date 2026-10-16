@@ -183,6 +183,11 @@ export default function AvailableShiftsPage() {
     );
 
     const occupiedIntervals: Array<{ date: string; startTime: string; endTime: string }> = [];
+    const assignedIntervals: Array<{
+      date: string;
+      startTime: string;
+      endTime: string;
+    }> = [];
 
     (applicationRows ?? []).forEach((row: any) => {
       const date = row.shift_slots?.exam_days?.exam_date;
@@ -190,11 +195,14 @@ export default function AvailableShiftsPage() {
       const fallback = fallbackTimes(session);
 
       if (date && session) {
-        occupiedIntervals.push({
+        const interval = {
           date,
           startTime: String(row.shift_slots?.start_time ?? fallback.start).slice(0, 5),
           endTime: String(row.shift_slots?.end_time ?? fallback.end).slice(0, 5),
-        });
+        };
+
+        occupiedIntervals.push(interval);
+        assignedIntervals.push(interval);
       }
     });
 
@@ -274,11 +282,15 @@ export default function AvailableShiftsPage() {
         const alreadyBusyAtThisTime = occupiedIntervals.some(interval =>
           shiftsOverlap(shift, interval)
         );
+        const clashesWithAssignment = assignedIntervals.some(interval =>
+          shiftsOverlap(shift, interval)
+        );
 
         return (
           isTodayOrFuture(shift.date) &&
           !isFull &&
           !alreadyAssignedToThisPerson &&
+          !clashesWithAssignment &&
           (!alreadyBusyAtThisTime || hasAppliedForThisShift)
         );
       })
