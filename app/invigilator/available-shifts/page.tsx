@@ -207,7 +207,7 @@ export default function AvailableShiftsPage() {
     });
 
     const { data: assignmentRows, error: assignmentError } = await supabase
-      .from('shift_assignments')
+      .from('published_shift_team')
       .select('shift_slot_id, invigilator_id')
       .in('shift_slot_id', slotIds)
       .eq('published', true);
@@ -304,6 +304,22 @@ export default function AvailableShiftsPage() {
 
       setStatus('Application removed.');
     } else {
+      const { count: assignedCount, error: assignedCountError } = await supabase
+        .from('published_shift_team')
+        .select('id', { count: 'exact', head: true })
+        .eq('shift_slot_id', shift.shiftSlotId);
+
+      if (assignedCountError) {
+        setStatus(`Could not check remaining spaces: ${assignedCountError.message}`);
+        return;
+      }
+
+      if ((assignedCount ?? 0) >= shift.needed) {
+        setStatus('This shift is now full and is no longer available.');
+        await loadShifts();
+        return;
+      }
+
       const { data: existingApplications, error: existingApplicationsError } =
         await supabase
           .from('shift_applications')
