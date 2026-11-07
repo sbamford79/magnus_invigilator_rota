@@ -411,12 +411,12 @@ export default function AssignInvigilatorsPage() {
       ? current.filter(id => id !== invigilatorId)
       : [...current, invigilatorId];
 
-    if (exists && (publishedAssignments[shiftId] ?? []).includes(invigilatorId)) {
+    if (exists) {
       setPendingRemoval({ shiftId, invigilatorId, updatedSelection: updated });
       return;
     }
-
-    if (exists) await saveAssignmentsForShift(shiftId, updated);
+    setSelected(prev => ({ ...prev, [shiftId]: updated }));
+    await saveAssignmentsForShift(shiftId, updated);
   }
 
   async function addManualInvigilator(shiftId: string) {
@@ -479,12 +479,7 @@ export default function AssignInvigilatorsPage() {
     const current = selected[shiftId] ?? [];
     const updated = current.filter(id => id !== invigilatorId);
 
-    if ((publishedAssignments[shiftId] ?? []).includes(invigilatorId)) {
-      setPendingRemoval({ shiftId, invigilatorId, updatedSelection: updated });
-      return;
-    }
-    setSelected(prev => ({ ...prev, [shiftId]: updated }));
-    await saveAssignmentsForShift(shiftId, updated);
+    setPendingRemoval({ shiftId, invigilatorId, updatedSelection: updated });
   }
 
   async function confirmRemoval(removeAvailability: boolean) {
