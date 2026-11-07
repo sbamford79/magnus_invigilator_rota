@@ -34,14 +34,20 @@ export default function AdminLayout({
       return;
     }
 
-    const { data: invigilator } = await supabase
-      .from('invigilators')
-      .select('id')
+    const { data: adminUser } = await supabase
+      .from('admin_users')
+      .select('auth_user_id')
       .eq('auth_user_id', user.id)
       .maybeSingle();
 
-    if (invigilator) {
-      window.location.href = '/invigilator';
+    if (!adminUser) {
+      const { data: invigilator } = await supabase
+        .from('invigilators')
+        .select('id')
+        .eq('auth_user_id', user.id)
+        .maybeSingle();
+
+      window.location.href = invigilator ? '/invigilator' : '/login';
       return;
     }
 
@@ -115,6 +121,32 @@ export default function AdminLayout({
 
     if (typeof window !== 'undefined') {
       localStorage.removeItem('selectedSeasonId');
+    }
+
+    await loadSeasons();
+  }
+
+  async function unarchiveCurrentSeason() {
+    if (!currentSeason || currentSeason.status !== 'archived') return;
+
+    const confirmed = window.confirm(
+      `Unarchive season "${currentSeason.name}"?\n\nThis will restore it to the active season list with all of its existing data.`
+    );
+
+    if (!confirmed) return;
+
+    const { error } = await supabase
+      .from('seasons')
+      .update({ status: 'active' })
+      .eq('id', currentSeason.id);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('selectedSeasonId', currentSeason.id);
     }
 
     await loadSeasons();
@@ -219,6 +251,23 @@ export default function AdminLayout({
                     }}
                   >
                     Archive season
+                  </button>
+                )}
+
+                {currentSeason?.status === 'archived' && (
+                  <button
+                    onClick={unarchiveCurrentSeason}
+                    style={{
+                      background: 'white',
+                      color: '#4c1d95',
+                      border: 'none',
+                      padding: '5px 8px',
+                      borderRadius: 6,
+                      cursor: 'pointer',
+                      fontWeight: 700,
+                    }}
+                  >
+                    Unarchive season
                   </button>
                 )}
 

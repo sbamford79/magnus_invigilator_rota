@@ -4,14 +4,15 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { isTodayOrFuture } from '../../../lib/dateHelpers';
 
-type SessionKey = 'morning' | 'mid' | 'afternoon';
-
 type AvailableShift = {
   shiftSlotId: string;
   examDayId: string;
   date: string;
   label: string;
-  session: SessionKey;
+  session: string;
+  displayLabel: string;
+  startTime: string;
+  endTime: string;
   needed: number;
   applied: boolean;
   assignedCount: number;
@@ -23,19 +24,40 @@ type ShiftGroup = {
   shifts: AvailableShift[];
 };
 
-function formatSessionLabel(session: SessionKey) {
+function formatSessionLabel(session: string) {
   if (session === 'mid') return 'Mid';
+  if (session.startsWith('extra_')) return 'Additional session';
   return session.charAt(0).toUpperCase() + session.slice(1);
 }
 
-const sessionOrder: Record<SessionKey, number> = {
+const sessionOrder: Record<string, number> = {
   morning: 1,
   mid: 2,
   afternoon: 3,
 };
 
+type AppliedShift = AvailableShift & {
+  assigned: boolean;
+};
+
+function fallbackTimes(session: string) {
+  if (session === 'morning') return { start: '09:00', end: '11:30' };
+  if (session === 'mid') return { start: '11:30', end: '13:00' };
+  return { start: '13:00', end: '15:30' };
+}
+
+function shiftsOverlap(
+  first: { date: string; startTime: string; endTime: string },
+  second: { date: string; startTime: string; endTime: string }
+) {
+  return first.date === second.date &&
+    first.startTime < second.endTime &&
+    second.startTime < first.endTime;
+}
+
 export default function AvailableShiftsPage() {
   const [shifts, setShifts] = useState<AvailableShift[]>([]);
+  const [appliedShifts, setAppliedShifts] = useState<AppliedShift[]>([]);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState('');
 
@@ -77,6 +99,9 @@ export default function AvailableShiftsPage() {
         id,
         exam_day_id,
         session_key,
+        display_label,
+        start_time,
+        end_time,
         needed,
         published,
         exam_days (
@@ -97,6 +122,7 @@ export default function AvailableShiftsPage() {
 
     if (slots.length === 0) {
       setShifts([]);
+      setAppliedShifts([]);
       setLoading(false);
       return;
     }
@@ -105,7 +131,17 @@ export default function AvailableShiftsPage() {
 
     const { data: applicationRows, error: applicationError } = await supabase
       .from('shift_applications')
-      .select('shift_slot_id')
+      .select(`
+        shift_slot_id,
+        shift_slots (
+          session_key,
+          start_time,
+          end_time,
+          exam_days (
+            exam_date
+          )
+        )
+      `)
       .eq('invigilator_id', invigilatorId);
 
     if (applicationError) {
@@ -121,7 +157,17 @@ export default function AvailableShiftsPage() {
     const { data: invigilatorAssignmentRows, error: invigilatorAssignmentError } =
       await supabase
         .from('shift_assignments')
-        .select('shift_slot_id')
+        .select(`
+          shift_slot_id,
+          shift_slots (
+            session_key,
+            start_time,
+            end_time,
+            exam_days (
+              exam_date
+            )
+          )
+        `)
         .eq('invigilator_id', invigilatorId);
 
     if (invigilatorAssignmentError) {
@@ -137,7 +183,7 @@ export default function AvailableShiftsPage() {
     );
 
     const { data: assignmentRows, error: assignmentError } = await supabase
-      .from('shift_assignments')
+      .from('published_shift_team')
       .select('shift_slot_id, invigilator_id')
       .in('shift_slot_id', slotIds)
       .eq('published', true);
@@ -155,9 +201,9 @@ export default function AvailableShiftsPage() {
         (assignedCountByShift[row.shift_slot_id] ?? 0) + 1;
     });
 
-    const mappedShifts: AvailableShift[] = (slots as any[])
-      .map(slot => {
+    const allMappedShifts: AvailableShift[] = (slots as any[]).map(slot => {
         const assignedCount = assignedCountByShift[slot.id] ?? 0;
+        const fallback = fallbackTimes(slot.session_key);
 
         return {
           shiftSlotId: slot.id,
@@ -165,11 +211,31 @@ export default function AvailableShiftsPage() {
           date: slot.exam_days?.exam_date ?? '',
           label: slot.exam_days?.label ?? 'Unknown date',
           session: slot.session_key,
+          displayLabel: slot.display_label ?? formatSessionLabel(slot.session_key),
+          startTime: String(slot.start_time ?? fallback.start).slice(0, 5),
+          endTime: String(slot.end_time ?? fallback.end).slice(0, 5),
           needed: slot.needed,
           applied: appliedShiftIds.has(slot.id),
           assignedCount,
         };
-      })
+      });
+
+    setAppliedShifts(
+      allMappedShifts
+        .filter(
+          shift => shift.applied && isTodayOrFuture(shift.date)
+        )
+        .map(shift => ({
+          ...shift,
+          assigned: assignedShiftIdsForThisInvigilator.has(shift.shiftSlotId),
+        }))
+        .sort((a, b) => {
+          if (a.date !== b.date) return a.date.localeCompare(b.date);
+          return a.startTime.localeCompare(b.startTime);
+        })
+    );
+
+    const mappedShifts = allMappedShifts
       .filter(shift => {
         const isFull = shift.assignedCount >= shift.needed;
         const alreadyAssignedToThisPerson =
@@ -183,7 +249,7 @@ export default function AvailableShiftsPage() {
       })
       .sort((a, b) => {
         if (a.date !== b.date) return a.date.localeCompare(b.date);
-        return (sessionOrder[a.session] ?? 99) - (sessionOrder[b.session] ?? 99);
+        return a.startTime.localeCompare(b.startTime);
       });
 
     setShifts(mappedShifts);
@@ -225,6 +291,22 @@ export default function AvailableShiftsPage() {
 
       setStatus('Application removed.');
     } else {
+      const { count: assignedCount, error: assignedCountError } = await supabase
+        .from('published_shift_team')
+        .select('id', { count: 'exact', head: true })
+        .eq('shift_slot_id', shift.shiftSlotId);
+
+      if (assignedCountError) {
+        setStatus(`Could not check remaining spaces: ${assignedCountError.message}`);
+        return;
+      }
+
+      if ((assignedCount ?? 0) >= shift.needed) {
+        setStatus('This shift is now full and is no longer available.');
+        await loadShifts();
+        return;
+      }
+
       const { error } = await supabase.from('shift_applications').insert({
         shift_slot_id: shift.shiftSlotId,
         invigilator_id: invigilator.id,
@@ -353,7 +435,7 @@ export default function AvailableShiftsPage() {
                   >
                     <div style={{ marginBottom: 6, color: '#333' }}>
                       <strong>Session:</strong>{' '}
-                      {formatSessionLabel(shift.session)}
+                      {shift.displayLabel} ({shift.startTime}–{shift.endTime})
                     </div>
 
                     <div style={{ marginBottom: 6, color: '#333' }}>
@@ -390,6 +472,82 @@ export default function AvailableShiftsPage() {
           ))}
         </div>
       )}
+
+      <section style={{ marginTop: 30 }}>
+        <div
+          style={{
+            background: 'white',
+            border: '1px solid #ddd6fe',
+            borderRadius: 16,
+            padding: 22,
+            boxShadow: '0 4px 14px rgba(0,0,0,0.06)',
+          }}
+        >
+          <h2 style={{ margin: 0, color: '#4c1d95', fontSize: 24 }}>
+            My Shift Applications
+          </h2>
+          <p style={{ color: '#555', marginTop: 8, marginBottom: 18 }}>
+            Untick an outstanding application if you are no longer available.
+            Assigned shifts are shown in grey and cannot be removed here.
+          </p>
+
+          {appliedShifts.length === 0 ? (
+            <p style={{ margin: 0, color: '#6b7280' }}>
+              You do not have any current shift applications.
+            </p>
+          ) : (
+            <div style={{ display: 'grid', gap: 12 }}>
+              {appliedShifts.map(shift => (
+                <div
+                  key={shift.shiftSlotId}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: 18,
+                    flexWrap: 'wrap',
+                    padding: 15,
+                    borderRadius: 12,
+                    border: shift.assigned
+                      ? '1px solid #d1d5db'
+                      : '1px solid #c4b5fd',
+                    background: shift.assigned ? '#f3f4f6' : '#faf5ff',
+                    color: shift.assigned ? '#6b7280' : '#374151',
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                      {shift.label}
+                    </div>
+                    <div>
+                      {shift.displayLabel} ({shift.startTime}–{shift.endTime})
+                    </div>
+                  </div>
+
+                  <label
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 9,
+                      fontWeight: 700,
+                      cursor: shift.assigned ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked
+                      disabled={shift.assigned}
+                      onChange={() => toggleApplication(shift)}
+                      style={{ transform: 'scale(1.1)' }}
+                    />
+                    {shift.assigned ? 'Assigned' : 'Applied'}
+                  </label>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
     </div>
   );
 }

@@ -1,7 +1,6 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabase';
 
@@ -12,86 +11,6 @@ export default function InvigilatorLayout({
 }) {
   const router = useRouter();
   const pathname = usePathname();
-
-  const [notificationPermission, setNotificationPermission] = useState<
-    NotificationPermission | 'unsupported'
-  >('default');
-
-  const shownNotificationIds = useRef<Set<string>>(new Set());
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    if (!('Notification' in window)) {
-      setNotificationPermission('unsupported');
-      return;
-    }
-
-    setNotificationPermission(Notification.permission);
-  }, []);
-
-  useEffect(() => {
-    let intervalId: NodeJS.Timeout | null = null;
-
-    async function checkNotifications() {
-      if (typeof window === 'undefined') return;
-      if (!('Notification' in window)) return;
-      if (Notification.permission !== 'granted') return;
-
-      const { data: authData } = await supabase.auth.getUser();
-      if (!authData.user) return;
-
-      const { data: invigilator } = await supabase
-        .from('invigilators')
-        .select('id')
-        .eq('auth_user_id', authData.user.id)
-        .single();
-
-      if (!invigilator) return;
-
-      const { data: rows, error } = await supabase
-        .from('notifications')
-        .select('id, title, message, is_read, created_at')
-        .eq('invigilator_id', invigilator.id)
-        .eq('is_read', false)
-        .order('created_at', { ascending: false });
-
-      if (error || !rows) return;
-
-      for (const row of rows) {
-        if (shownNotificationIds.current.has(row.id)) continue;
-
-        shownNotificationIds.current.add(row.id);
-
-        new Notification(row.title, {
-          body: row.message,
-        });
-
-        await supabase
-          .from('notifications')
-          .update({ is_read: true })
-          .eq('id', row.id);
-      }
-    }
-
-    checkNotifications();
-    intervalId = setInterval(checkNotifications, 15000);
-
-    return () => {
-      if (intervalId) clearInterval(intervalId);
-    };
-  }, []);
-
-  async function enableNotifications() {
-    if (typeof window === 'undefined') return;
-    if (!('Notification' in window)) {
-      setNotificationPermission('unsupported');
-      return;
-    }
-
-    const permission = await Notification.requestPermission();
-    setNotificationPermission(permission);
-  }
 
   async function handleLogout() {
     await supabase.auth.signOut();
@@ -162,24 +81,6 @@ export default function InvigilatorLayout({
             <NavLink href="/invigilator/exam-timetable" currentPath={pathname}>
               Exam Timetable
             </NavLink>
-
-            {notificationPermission !== 'granted' &&
-              notificationPermission !== 'unsupported' && (
-                <button
-                  onClick={enableNotifications}
-                  style={{
-                    background: 'rgba(255,255,255,0.15)',
-                    color: 'white',
-                    border: '1px solid rgba(255,255,255,0.35)',
-                    padding: '8px 14px',
-                    borderRadius: 8,
-                    cursor: 'pointer',
-                    fontWeight: 700,
-                  }}
-                >
-                  Enable notifications
-                </button>
-              )}
 
             <button
               onClick={handleLogout}

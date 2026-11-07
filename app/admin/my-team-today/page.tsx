@@ -20,7 +20,10 @@ type ShiftSlot = {
 };
 
 type Assignment = {
+  id: string;
   shift_slot_id: string;
+  attended: boolean;
+  attended_at: string | null;
   invigilators:
     | {
         full_name: string;
@@ -61,6 +64,9 @@ export default function AdminMyTeamTodayPage() {
   const [calendarGaps, setCalendarGaps] = useState<Record<string, number>>({});
   const [status, setStatus] = useState('');
   const [loading, setLoading] = useState(false);
+  const [savingAttendanceId, setSavingAttendanceId] = useState<string | null>(
+    null
+  );
 
   useEffect(() => {
     loadDay();
@@ -190,7 +196,10 @@ export default function AdminMyTeamTodayPage() {
     const { data: assignmentRows, error: assignmentError } = await supabase
       .from('shift_assignments')
       .select(`
+        id,
         shift_slot_id,
+        attended,
+        attended_at,
         invigilators (
           full_name
         )
@@ -208,10 +217,45 @@ export default function AdminMyTeamTodayPage() {
     setLoading(false);
   }
 
+  async function toggleAttendance(assignmentId: string, attended: boolean) {
+    setSavingAttendanceId(assignmentId);
+    setStatus('');
+
+    setAssignments(current =>
+      current.map(assignment =>
+        assignment.id === assignmentId
+          ? {
+              ...assignment,
+              attended,
+              attended_at: attended ? new Date().toISOString() : null,
+            }
+          : assignment
+      )
+    );
+
+    const { error } = await supabase
+      .from('shift_assignments')
+      .update({
+        attended,
+        attended_at: attended ? new Date().toISOString() : null,
+      })
+      .eq('id', assignmentId);
+
+    if (error) {
+      setStatus(error.message);
+      await loadDay();
+    }
+
+    setSavingAttendanceId(null);
+  }
+
   const calendarCells = useMemo(() => buildCalendarDays(viewDate), [viewDate]);
 
   const assignedBySlot = useMemo(() => {
-    const map: Record<string, string[]> = {};
+    const map: Record<
+      string,
+      { id: string; name: string; attended: boolean }[]
+    > = {};
 
     for (const assignment of assignments) {
       if (!map[assignment.shift_slot_id]) {
@@ -223,7 +267,11 @@ export default function AdminMyTeamTodayPage() {
   : assignment.invigilators;
 
 if (invigilator?.full_name) {
-  map[assignment.shift_slot_id].push(invigilator.full_name);
+  map[assignment.shift_slot_id].push({
+    id: assignment.id,
+    name: invigilator.full_name,
+    attended: assignment.attended === true,
+  });
 }
     }
 
@@ -390,7 +438,10 @@ if (invigilator?.full_name) {
         ) : (
           <div style={sessionList}>
             {slots.map(slot => {
-              const names = assignedBySlot[slot.id] ?? [];
+              const assignedInvigilators = assignedBySlot[slot.id] ?? [];
+              const attendedCount = assignedInvigilators.filter(
+                assignment => assignment.attended
+              ).length;
 
               return (
                 <div key={slot.id} style={teamCard}>
@@ -401,10 +452,12 @@ if (invigilator?.full_name) {
 
                     <span
                       style={
-                        names.length >= slot.needed ? greenBadge : amberBadge
+                        assignedInvigilators.length >= slot.needed
+                          ? greenBadge
+                          : amberBadge
                       }
                     >
-                      {names.length}/{slot.needed}
+                      {assignedInvigilators.length}/{slot.needed} assigned
                     </span>
                   </div>
 
@@ -414,16 +467,76 @@ if (invigilator?.full_name) {
                     </div>
                   )}
 
-                  {names.length === 0 ? (
+                  {assignedInvigilators.length === 0 ? (
                     <p style={muted}>No one assigned yet.</p>
                   ) : (
-                    <ul style={{ margin: 0, paddingLeft: 20 }}>
-                      {names.map(name => (
-                        <li key={name} style={{ marginBottom: 4 }}>
-                          {name}
-                        </li>
-                      ))}
-                    </ul>
+                    <>
+                      <div
+                        style={{
+                          marginBottom: 10,
+                          color: '#4b5563',
+                          fontSize: 13,
+                          fontWeight: 700,
+                        }}
+                      >
+                        {attendedCount}/{assignedInvigilators.length} marked
+                        attended
+                      </div>
+                      <div style={{ display: 'grid', gap: 8 }}>
+                        {assignedInvigilators.map(assignment => (
+                          <label
+                            key={assignment.id}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 10,
+                              padding: '9px 10px',
+                              borderRadius: 10,
+                              border: assignment.attended
+                                ? '1px solid #86efac'
+                                : '1px solid #e5e7eb',
+                              background: assignment.attended
+                                ? '#f0fdf4'
+                                : 'white',
+                              cursor:
+                                savingAttendanceId === assignment.id
+                                  ? 'wait'
+                                  : 'pointer',
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={assignment.attended}
+                              disabled={savingAttendanceId === assignment.id}
+                              onChange={event =>
+                                toggleAttendance(
+                                  assignment.id,
+                                  event.target.checked
+                                )
+                              }
+                            />
+                            <span
+                              style={{
+                                flex: 1,
+                                fontWeight: 700,
+                                color: '#1f2937',
+                              }}
+                            >
+                              {assignment.name}
+                            </span>
+                            <span
+                              style={
+                                assignment.attended ? greenBadge : greyBadge
+                              }
+                            >
+                              {assignment.attended
+                                ? 'Attended'
+                                : 'Not marked'}
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    </>
                   )}
                 </div>
               );

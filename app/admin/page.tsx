@@ -1,8 +1,124 @@
 'use client';
 
 import Link from 'next/link';
+import { useContext, useEffect, useState } from 'react';
+import { supabase } from '../../lib/supabase';
+import { formatLongDate } from '../../lib/dateHelpers';
+import { SeasonContext } from './SeasonContext';
+
+type ShiftReleaseNotification = {
+  id: string;
+  invigilator_name: string;
+  exam_date: string;
+  session_key: string;
+  created_at: string;
+  read_at: string | null;
+};
+
+function sessionLabel(session: string) {
+  if (session === 'mid') return 'Mid';
+  return session.charAt(0).toUpperCase() + session.slice(1);
+}
 
 export default function AdminHomePage() {
+  const { currentSeason } = useContext(SeasonContext);
+  const [releaseNotifications, setReleaseNotifications] = useState<
+    ShiftReleaseNotification[]
+  >([]);
+  const [markingReadId, setMarkingReadId] = useState<string | null>(null);
+  const [notificationStatus, setNotificationStatus] = useState('');
+
+  useEffect(() => {
+    loadReleaseNotifications();
+  }, [currentSeason?.id]);
+
+  async function loadReleaseNotifications() {
+    if (!currentSeason?.id) return;
+
+    const { data: authData } = await supabase.auth.getUser();
+    const adminUserId = authData.user?.id;
+
+    if (!adminUserId) return;
+
+    const { data, error: notificationError } = await supabase
+      .from('shift_release_notifications')
+      .select(
+        'id, invigilator_name, exam_date, session_key, created_at, read_at'
+      )
+      .eq('season_id', currentSeason.id)
+      .order('created_at', { ascending: false });
+
+    if (notificationError) {
+      setNotificationStatus(notificationError.message);
+      return;
+    }
+
+    const notifications = (data ?? []) as ShiftReleaseNotification[];
+    const notificationIds = notifications.map(notification => notification.id);
+
+    if (notificationIds.length === 0) {
+      setReleaseNotifications([]);
+      return;
+    }
+
+    const { data: readRows, error: readsError } = await supabase
+      .from('shift_release_notification_reads')
+      .select('notification_id')
+      .eq('admin_user_id', adminUserId)
+      .in('notification_id', notificationIds);
+
+    if (readsError) {
+      setNotificationStatus(
+        'The per-admin read tracking needs to be enabled in Supabase.'
+      );
+      return;
+    }
+
+    const readIds = new Set(
+      (readRows ?? []).map(row => String(row.notification_id))
+    );
+
+    setReleaseNotifications(
+      notifications.filter(
+        notification => !notification.read_at && !readIds.has(notification.id)
+      )
+    );
+    setNotificationStatus('');
+  }
+
+  async function markNotificationRead(id: string) {
+    setMarkingReadId(id);
+    setNotificationStatus('');
+
+    const { data: authData } = await supabase.auth.getUser();
+    const adminUserId = authData.user?.id;
+
+    if (!adminUserId) {
+      setNotificationStatus('Please sign in again.');
+      setMarkingReadId(null);
+      return;
+    }
+
+    const { error } = await supabase
+      .from('shift_release_notification_reads')
+      .upsert(
+        { notification_id: id, admin_user_id: adminUserId },
+        { onConflict: 'notification_id,admin_user_id' }
+      );
+
+    if (!error) {
+      setReleaseNotifications(current =>
+        current.filter(notification => notification.id !== id)
+      );
+    } else {
+      setNotificationStatus(error.message);
+    }
+
+    setMarkingReadId(null);
+  }
+
+  const unreadCount = releaseNotifications.length;
+
   return (
     <div style={{ padding: 24, maxWidth: 1100, margin: '0 auto' }}>
       <div
@@ -20,6 +136,132 @@ export default function AdminHomePage() {
           Manage exam seasons, shifts, invigilators, assignments and reports.
         </p>
       </div>
+
+      <section
+        style={{
+          background: 'white',
+          border:
+            unreadCount > 0 ? '2px solid #f59e0b' : '1px solid #e5e7eb',
+          borderRadius: 16,
+          padding: 20,
+          marginBottom: 24,
+          boxShadow: '0 4px 14px rgba(0,0,0,0.06)',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 12,
+            marginBottom: 14,
+            flexWrap: 'wrap',
+          }}
+        >
+          <div>
+            <h2 style={{ margin: 0, color: '#4c1d95' }}>
+              Released shift notifications
+            </h2>
+            <p style={{ margin: '5px 0 0', color: '#6b7280' }}>
+              Invigilators who have dropped an assigned shift.
+            </p>
+          </div>
+          <span
+            style={{
+              background: unreadCount > 0 ? '#fef3c7' : '#dcfce7',
+              color: unreadCount > 0 ? '#92400e' : '#166534',
+              borderRadius: 999,
+              padding: '6px 10px',
+              fontWeight: 800,
+              fontSize: 13,
+            }}
+          >
+            {unreadCount} unread
+          </span>
+        </div>
+
+        {releaseNotifications.length === 0 ? (
+          <div
+            style={{
+              background: '#f9fafb',
+              color: '#6b7280',
+              padding: 14,
+              borderRadius: 10,
+            }}
+          >
+            No released shifts for this season.
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gap: 9 }}>
+            {releaseNotifications.map(notification => (
+              <div
+                key={notification.id}
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: 12,
+                  flexWrap: 'wrap',
+                  padding: 12,
+                  borderRadius: 11,
+                  border: '1px solid #fcd34d',
+                  background: '#fffbeb',
+                }}
+              >
+                <div>
+                  <strong>{notification.invigilator_name}</strong> released the{' '}
+                  <strong>{sessionLabel(notification.session_key)}</strong>{' '}
+                  shift on{' '}
+                  <strong>{formatLongDate(notification.exam_date)}</strong>.
+                  <div
+                    style={{
+                      color: '#6b7280',
+                      fontSize: 12,
+                      marginTop: 4,
+                    }}
+                  >
+                    Released{' '}
+                    {new Date(notification.created_at).toLocaleString('en-GB')}
+                  </div>
+                </div>
+
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 7,
+                    color: '#4c1d95',
+                    fontWeight: 700,
+                    cursor:
+                      markingReadId === notification.id
+                        ? 'not-allowed'
+                        : 'pointer',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={false}
+                    disabled={markingReadId === notification.id}
+                    onChange={() => markNotificationRead(notification.id)}
+                    style={{
+                      width: 18,
+                      height: 18,
+                      accentColor: '#4c1d95',
+                    }}
+                  />
+                  {markingReadId === notification.id ? 'Clearing…' : 'Read'}
+                </label>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {notificationStatus && (
+          <p style={{ margin: '12px 0 0', color: '#b91c1c', fontWeight: 700 }}>
+            {notificationStatus}
+          </p>
+        )}
+      </section>
 
       <div
         style={{

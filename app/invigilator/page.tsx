@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { supabase } from '../../lib/supabase';
+import { toYMD } from '../../lib/dateHelpers';
 
 type Notice = {
   id: string;
@@ -10,6 +11,48 @@ type Notice = {
   content: string;
   position: number;
 };
+
+type ShiftNotification = {
+  id: string;
+  notification_type: 'shifts_available' | 'assignments_published';
+  title: string;
+  message: string;
+  created_at: string;
+};
+
+type TodayShift = {
+  assignmentId: string;
+  session: string;
+  displayLabel: string;
+  startTime: string;
+  label: string;
+  clockInAt: string | null;
+  clockOutAt: string | null;
+};
+
+function formatSession(session: TodayShift['session']) {
+  if (!session) return 'Session';
+  if (session === 'mid') return 'Mid';
+  if (session.startsWith('extra_')) return 'Additional session';
+  return session.charAt(0).toUpperCase() + session.slice(1);
+}
+
+function formatClockTime(value: string | null) {
+  if (!value) return 'Not recorded';
+  return new Date(value).toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function clockInputValue(value: string | null) {
+  if (!value) return '';
+  return new Date(value).toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
 
 const defaultNotices: Notice[] = [
   {
@@ -37,6 +80,16 @@ const defaultNotices: Notice[] = [
 export default function InvigilatorHomePage() {
   const [name, setName] = useState('');
   const [notices, setNotices] = useState<Notice[]>(defaultNotices);
+  const [shiftNotifications, setShiftNotifications] = useState<
+    ShiftNotification[]
+  >([]);
+  const [todayShifts, setTodayShifts] = useState<TodayShift[]>([]);
+  const [clockingId, setClockingId] = useState<string | null>(null);
+  const [clockStatus, setClockStatus] = useState('');
+  const [editingClockId, setEditingClockId] = useState<string | null>(null);
+  const [editedClockTimes, setEditedClockTimes] = useState<
+    Record<string, { clockIn: string; clockOut: string }>
+  >({});
 
   useEffect(() => {
     loadInvigilator();
@@ -50,12 +103,177 @@ export default function InvigilatorHomePage() {
 
     const { data } = await supabase
       .from('invigilators')
-      .select('full_name')
+      .select('id, full_name')
       .eq('auth_user_id', authData.user.id)
       .single();
 
     if (data?.full_name) {
       setName(data.full_name);
+    }
+
+    if (!data?.id) return;
+
+    const { data: activeSeasonRows } = await supabase
+      .from('seasons')
+      .select('id')
+      .eq('status', 'active');
+
+    const activeSeasonIds = new Set(
+      (activeSeasonRows ?? []).map(season => season.id)
+    );
+
+    const { data: assignmentRows } = await supabase
+      .from('shift_assignments')
+      .select(`
+        id,
+        clock_in_at,
+        clock_out_at,
+        shift_slots (
+          session_key,
+          display_label,
+          start_time,
+          exam_days (
+            season_id,
+            exam_date,
+            label
+          )
+        )
+      `)
+      .eq('invigilator_id', data.id)
+      .eq('published', true);
+
+    const today = toYMD(new Date());
+    const sessionOrder = { morning: 1, mid: 2, afternoon: 3 };
+
+    const mappedTodayShifts = (assignmentRows ?? [])
+      .map((assignment: any) => ({
+        assignmentId: assignment.id,
+        session: assignment.shift_slots?.session_key,
+        displayLabel:
+          assignment.shift_slots?.display_label ??
+          formatSession(assignment.shift_slots?.session_key),
+        startTime: String(assignment.shift_slots?.start_time ?? '').slice(0, 5),
+        label: assignment.shift_slots?.exam_days?.label,
+        date: assignment.shift_slots?.exam_days?.exam_date,
+        seasonId: assignment.shift_slots?.exam_days?.season_id,
+        clockInAt: assignment.clock_in_at,
+        clockOutAt: assignment.clock_out_at,
+      }))
+      .filter(
+        shift =>
+          shift.date === today &&
+          activeSeasonIds.has(shift.seasonId) &&
+          Boolean(shift.session)
+      )
+      .sort((a, b) => {
+        if (a.startTime && b.startTime) return a.startTime.localeCompare(b.startTime);
+        return (
+          (sessionOrder[a.session as keyof typeof sessionOrder] ?? 99) -
+          (sessionOrder[b.session as keyof typeof sessionOrder] ?? 99)
+        );
+      }) as TodayShift[];
+
+    setTodayShifts(mappedTodayShifts);
+
+    const { data: notificationRows } = await supabase
+      .from('invigilator_shift_notifications')
+      .select('id, notification_type, title, message, created_at')
+      .eq('invigilator_id', data?.id)
+      .is('read_at', null)
+      .order('created_at', { ascending: false });
+
+    setShiftNotifications(
+      (notificationRows ?? []) as ShiftNotification[]
+    );
+  }
+
+  async function clockShift(
+    assignmentId: string,
+    action: 'in' | 'out' | 'undo_in' | 'undo_out'
+  ) {
+    const statusByAction = {
+      in: ['Clocking in...', 'Clocked in.'],
+      out: ['Clocking out...', 'Clocked out.'],
+      undo_in: ['Undoing clock in...', 'Clock in removed.'],
+      undo_out: ['Undoing clock out...', 'Clock out removed.'],
+    };
+
+    setClockingId(assignmentId);
+    setClockStatus(statusByAction[action][0]);
+
+    const { error } = await supabase.rpc('clock_shift', {
+      p_assignment_id: assignmentId,
+      p_action: action,
+    });
+
+    if (error) {
+      setClockStatus(error.message);
+    } else {
+      setClockStatus(statusByAction[action][1]);
+      await loadInvigilator();
+    }
+
+    setClockingId(null);
+  }
+
+  function startEditingClock(shift: TodayShift) {
+    setEditedClockTimes(current => ({
+      ...current,
+      [shift.assignmentId]: {
+        clockIn: clockInputValue(shift.clockInAt),
+        clockOut: clockInputValue(shift.clockOutAt),
+      },
+    }));
+    setEditingClockId(shift.assignmentId);
+    setClockStatus('');
+  }
+
+  async function saveEditedClockTimes(assignmentId: string) {
+    const edited = editedClockTimes[assignmentId];
+    if (!edited?.clockIn && !edited?.clockOut) {
+      setClockStatus('Enter at least a start time.');
+      return;
+    }
+
+    if (!edited.clockIn && edited.clockOut) {
+      setClockStatus('Enter a start time before adding a finish time.');
+      return;
+    }
+
+    const today = toYMD(new Date());
+    const toTimestamp = (time: string) =>
+      time ? new Date(`${today}T${time}:00`).toISOString() : null;
+
+    setClockingId(assignmentId);
+    setClockStatus('Saving corrected times...');
+
+    const { error } = await supabase.rpc('set_shift_clock_times', {
+      p_assignment_id: assignmentId,
+      p_clock_in_at: toTimestamp(edited.clockIn),
+      p_clock_out_at: toTimestamp(edited.clockOut),
+    });
+
+    if (error) {
+      setClockStatus(error.message);
+    } else {
+      setClockStatus('Shift times updated.');
+      setEditingClockId(null);
+      await loadInvigilator();
+    }
+
+    setClockingId(null);
+  }
+
+  async function markShiftNotificationRead(notificationId: string) {
+    const { error } = await supabase
+      .from('invigilator_shift_notifications')
+      .update({ read_at: new Date().toISOString() })
+      .eq('id', notificationId);
+
+    if (!error) {
+      setShiftNotifications(current =>
+        current.filter(notification => notification.id !== notificationId)
+      );
     }
   }
 
@@ -80,11 +298,411 @@ export default function InvigilatorHomePage() {
         </p>
       </div>
 
+      {todayShifts.length > 0 && (
+        <section
+          aria-label="My shifts today"
+          style={{
+            background: 'white',
+            border: '2px solid #c4b5fd',
+            borderRadius: 16,
+            padding: 20,
+            marginBottom: 24,
+            boxShadow: '0 4px 14px rgba(0,0,0,0.06)',
+          }}
+        >
+          <h2 style={{ margin: '0 0 5px', color: '#4c1d95' }}>
+            My shifts today
+          </h2>
+          <p style={{ margin: '0 0 14px', color: '#6b7280' }}>
+            Record your arrival and departure time for today’s assigned shifts.
+          </p>
+
+          {clockStatus && (
+            <div
+              style={{
+                marginBottom: 12,
+                padding: 9,
+                background: '#f5f3ff',
+                borderRadius: 8,
+                color: '#4c1d95',
+                fontWeight: 700,
+              }}
+            >
+              {clockStatus}
+            </div>
+          )}
+
+          <div style={{ display: 'grid', gap: 10 }}>
+            {todayShifts.map(shift => (
+              <div
+                key={shift.assignmentId}
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: 14,
+                  flexWrap: 'wrap',
+                  padding: 14,
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 12,
+                  background: '#fafafa',
+                }}
+              >
+                <div>
+                  <strong style={{ color: '#1f2937' }}>{shift.label}</strong>
+                  <div style={{ marginTop: 4, color: '#6b7280' }}>
+                    {shift.displayLabel}
+                  </div>
+                  <div
+                    style={{
+                      marginTop: 5,
+                      fontSize: 12,
+                      color: '#4b5563',
+                    }}
+                  >
+                    In: {formatClockTime(shift.clockInAt)} · Out:{' '}
+                    {formatClockTime(shift.clockOutAt)}
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: 8,
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <button
+                    onClick={() => clockShift(shift.assignmentId, 'in')}
+                    disabled={Boolean(shift.clockInAt) || clockingId !== null}
+                    style={{
+                      background: shift.clockInAt ? '#e5e7eb' : '#16a34a',
+                      color: shift.clockInAt ? '#6b7280' : 'white',
+                      border: 'none',
+                      padding: '9px 12px',
+                      borderRadius: 8,
+                      cursor: shift.clockInAt ? 'default' : 'pointer',
+                      fontWeight: 800,
+                    }}
+                  >
+                    {shift.clockInAt ? 'Clocked in' : 'Clock in'}
+                  </button>
+                  {shift.clockInAt && !shift.clockOutAt && (
+                    <button
+                      onClick={() =>
+                        clockShift(shift.assignmentId, 'undo_in')
+                      }
+                      disabled={clockingId !== null}
+                      style={{
+                        background: 'white',
+                        color: '#991b1b',
+                        border: '1px solid #fecaca',
+                        padding: '9px 12px',
+                        borderRadius: 8,
+                        cursor: clockingId === null ? 'pointer' : 'default',
+                        fontWeight: 800,
+                      }}
+                    >
+                      Undo clock in
+                    </button>
+                  )}
+                  <button
+                    onClick={() => clockShift(shift.assignmentId, 'out')}
+                    disabled={
+                      !shift.clockInAt ||
+                      Boolean(shift.clockOutAt) ||
+                      clockingId !== null
+                    }
+                    style={{
+                      background:
+                        shift.clockInAt && !shift.clockOutAt
+                          ? '#4c1d95'
+                          : '#e5e7eb',
+                      color:
+                        shift.clockInAt && !shift.clockOutAt
+                          ? 'white'
+                          : '#6b7280',
+                      border: 'none',
+                      padding: '9px 12px',
+                      borderRadius: 8,
+                      cursor:
+                        shift.clockInAt && !shift.clockOutAt
+                          ? 'pointer'
+                          : 'default',
+                      fontWeight: 800,
+                    }}
+                  >
+                    {shift.clockOutAt ? 'Clocked out' : 'Clock out'}
+                  </button>
+                  {shift.clockOutAt && (
+                    <button
+                      onClick={() =>
+                        clockShift(shift.assignmentId, 'undo_out')
+                      }
+                      disabled={clockingId !== null}
+                      style={{
+                        background: 'white',
+                        color: '#991b1b',
+                        border: '1px solid #fecaca',
+                        padding: '9px 12px',
+                        borderRadius: 8,
+                        cursor: clockingId === null ? 'pointer' : 'default',
+                        fontWeight: 800,
+                      }}
+                    >
+                      Undo clock out
+                    </button>
+                  )}
+                  <button
+                    onClick={() => startEditingClock(shift)}
+                    disabled={clockingId !== null}
+                    style={{
+                      background: 'white',
+                      color: '#4c1d95',
+                      border: '1px solid #c4b5fd',
+                      padding: '9px 12px',
+                      borderRadius: 8,
+                      cursor: clockingId === null ? 'pointer' : 'default',
+                      fontWeight: 800,
+                    }}
+                  >
+                    Adjust times
+                  </button>
+                </div>
+
+                {editingClockId === shift.assignmentId && (
+                  <div
+                    style={{
+                      width: '100%',
+                      display: 'flex',
+                      alignItems: 'end',
+                      gap: 10,
+                      flexWrap: 'wrap',
+                      paddingTop: 12,
+                      borderTop: '1px solid #e5e7eb',
+                    }}
+                  >
+                    <label style={{ display: 'grid', gap: 5, fontWeight: 700 }}>
+                      Start time
+                      <input
+                        type="time"
+                        value={
+                          editedClockTimes[shift.assignmentId]?.clockIn ?? ''
+                        }
+                        onChange={event =>
+                          setEditedClockTimes(current => ({
+                            ...current,
+                            [shift.assignmentId]: {
+                              ...(current[shift.assignmentId] ?? {
+                                clockIn: '',
+                                clockOut: '',
+                              }),
+                              clockIn: event.target.value,
+                            },
+                          }))
+                        }
+                        style={{ padding: 8, borderRadius: 8, border: '1px solid #d1d5db' }}
+                      />
+                    </label>
+                    <label style={{ display: 'grid', gap: 5, fontWeight: 700 }}>
+                      Finish time
+                      <input
+                        type="time"
+                        value={
+                          editedClockTimes[shift.assignmentId]?.clockOut ?? ''
+                        }
+                        onChange={event =>
+                          setEditedClockTimes(current => ({
+                            ...current,
+                            [shift.assignmentId]: {
+                              ...(current[shift.assignmentId] ?? {
+                                clockIn: '',
+                                clockOut: '',
+                              }),
+                              clockOut: event.target.value,
+                            },
+                          }))
+                        }
+                        style={{ padding: 8, borderRadius: 8, border: '1px solid #d1d5db' }}
+                      />
+                    </label>
+                    <button
+                      onClick={() => saveEditedClockTimes(shift.assignmentId)}
+                      disabled={clockingId !== null}
+                      style={{
+                        background: '#4c1d95',
+                        color: 'white',
+                        border: 'none',
+                        padding: '9px 13px',
+                        borderRadius: 8,
+                        fontWeight: 800,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Save times
+                    </button>
+                    <button
+                      onClick={() => setEditingClockId(null)}
+                      style={{
+                        background: 'white',
+                        color: '#4b5563',
+                        border: '1px solid #d1d5db',
+                        padding: '9px 13px',
+                        borderRadius: 8,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section
+          aria-label="New shift notifications"
+          style={{
+            background: shiftNotifications.length > 0 ? '#fffbeb' : 'white',
+            border:
+              shiftNotifications.length > 0
+                ? '2px solid #fbbf24'
+                : '1px solid #e5e7eb',
+            borderRadius: 16,
+            padding: 20,
+            marginBottom: 24,
+            boxShadow: '0 4px 14px rgba(0,0,0,0.06)',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: 10,
+              marginBottom: 12,
+              flexWrap: 'wrap',
+            }}
+          >
+            <h2
+              style={{
+                margin: 0,
+                color: shiftNotifications.length > 0 ? '#92400e' : '#4c1d95',
+              }}
+            >
+              Shift notifications
+            </h2>
+            <span
+              style={{
+                background:
+                  shiftNotifications.length > 0 ? '#f59e0b' : '#dcfce7',
+                color: shiftNotifications.length > 0 ? 'white' : '#166534',
+                borderRadius: 999,
+                padding: '5px 9px',
+                fontSize: 12,
+                fontWeight: 800,
+              }}
+            >
+              {shiftNotifications.length > 0
+                ? `${shiftNotifications.length} unread`
+                : 'Up to date'}
+            </span>
+          </div>
+
+          {shiftNotifications.length === 0 ? (
+            <div
+              style={{
+                background: '#f9fafb',
+                borderRadius: 12,
+                padding: 14,
+                color: '#6b7280',
+              }}
+            >
+              You have no new shift updates. New available shifts and newly
+              assigned shifts will appear here.
+            </div>
+          ) : (
+          <div style={{ display: 'grid', gap: 10 }}>
+            {shiftNotifications.map(notification => (
+              <div
+                key={notification.id}
+                style={{
+                  background: 'white',
+                  border: '1px solid #fde68a',
+                  borderRadius: 12,
+                  padding: 14,
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: 14,
+                  flexWrap: 'wrap',
+                }}
+              >
+                <div style={{ flex: '1 1 280px' }}>
+                  <strong style={{ color: '#4c1d95', fontSize: 16 }}>
+                    {notification.title}
+                  </strong>
+                  <p style={{ margin: '5px 0', color: '#374151' }}>
+                    {notification.message}
+                  </p>
+                  <div style={{ color: '#6b7280', fontSize: 12 }}>
+                    {new Date(notification.created_at).toLocaleString('en-GB')}
+                  </div>
+                  <Link
+                    href={
+                      notification.notification_type === 'shifts_available'
+                        ? '/invigilator/available-shifts'
+                        : '/invigilator/my-shifts'
+                    }
+                    style={{
+                      display: 'inline-block',
+                      marginTop: 8,
+                      color: '#4c1d95',
+                      fontWeight: 700,
+                    }}
+                  >
+                    View shifts
+                  </Link>
+                </div>
+
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    fontWeight: 700,
+                    color: '#374151',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    onChange={() =>
+                      markShiftNotificationRead(notification.id)
+                    }
+                  />
+                  I’ve read this
+                </label>
+              </div>
+            ))}
+          </div>
+          )}
+        </section>
+
       <section aria-label="Important information" style={infoGrid}>
         {notices.map(notice => (
           <div key={notice.id} style={infoCard}>
-            <h2 style={sectionTitle}>{notice.title}</h2>
-            <p style={sectionText}>{notice.content}</p>
+            <div style={noticeHeading}>
+              <span style={noticeMarker} aria-hidden="true">
+                i
+              </span>
+              <h2 style={sectionTitle}>{notice.title}</h2>
+            </div>
+            <div style={sectionText}>{notice.content}</div>
           </div>
         ))}
       </section>
@@ -225,19 +843,46 @@ const infoGrid: React.CSSProperties = {
 
 const infoCard: React.CSSProperties = {
   background: '#ffffff',
-  borderRadius: 14,
-  padding: 22,
-  border: '1px solid #eee',
-  boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
+  borderRadius: 16,
+  padding: 0,
+  border: '1px solid #ddd6fe',
+  overflow: 'hidden',
+  boxShadow: '0 5px 16px rgba(76,29,149,0.08)',
+};
+
+const noticeHeading: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  padding: '14px 18px',
+  background: '#f5f3ff',
+  borderBottom: '1px solid #ede9fe',
+};
+
+const noticeMarker: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 24,
+  height: 24,
+  flexShrink: 0,
+  borderRadius: 999,
+  background: '#6d28d9',
+  color: 'white',
+  fontWeight: 800,
+  fontFamily: 'serif',
 };
 
 const sectionTitle: React.CSSProperties = {
-  marginTop: 0,
+  margin: 0,
   color: '#4c1d95',
+  fontSize: 19,
 };
 
 const sectionText: React.CSSProperties = {
-  margin: 0,
-  lineHeight: 1.6,
-  color: '#333',
+  padding: '17px 18px 19px',
+  lineHeight: 1.65,
+  color: '#374151',
+  whiteSpace: 'pre-wrap',
+  overflowWrap: 'anywhere',
 };

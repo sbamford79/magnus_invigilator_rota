@@ -1,6 +1,6 @@
 'use client';
 
-import { useContext, useEffect, useState } from 'react';
+import { useContext, useEffect, useRef, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { SeasonContext } from '../SeasonContext';
 import { isPastDate } from '../../../lib/dateHelpers';
@@ -11,9 +11,10 @@ type Shift = {
   needed: number;
   label: string;
   date: string;
+  visibleToInvigilators: boolean;
+  displayLabel: string;
   startTime: string | null;
   endTime: string | null;
-  visibleToInvigilators: boolean;
 };
 
 type Invigilator = {
@@ -28,29 +29,15 @@ type Applicant = {
   name: string;
 };
 
-type PendingRemoval = {
-  shiftId: string;
-  invigilatorId: string;
-  updatedSelection: string[];
-};
-
 const sessionOrder: Record<string, number> = {
   morning: 1,
   mid: 2,
   afternoon: 3,
 };
 
-const sortToggleButton: React.CSSProperties = {
-  border: 'none',
-  borderRadius: 7,
-  padding: '7px 10px',
-  cursor: 'pointer',
-  font: 'inherit',
-  fontWeight: 700,
-};
-
 function formatSessionLabel(session: string) {
   if (session === 'mid') return 'Mid';
+  if (session.startsWith('extra_')) return 'Additional session';
   return session.charAt(0).toUpperCase() + session.slice(1);
 }
 
@@ -66,6 +53,15 @@ function formatDateTime(dateStr: string | null) {
   });
 }
 
+function timeRangesOverlap(
+  firstStart: string,
+  firstEnd: string,
+  secondStart: string,
+  secondEnd: string
+) {
+  return firstStart < secondEnd && secondStart < firstEnd;
+}
+
 export default function AssignInvigilatorsPage() {
   const { currentSeason } = useContext(SeasonContext);
 
@@ -74,16 +70,11 @@ export default function AssignInvigilatorsPage() {
   const [applicants, setApplicants] = useState<Record<string, Applicant[]>>({});
   const [selected, setSelected] = useState<Record<string, string[]>>({});
   const [assigned, setAssigned] = useState<Record<string, string[]>>({});
-  const [publishedAssignments, setPublishedAssignments] = useState<
-    Record<string, string[]>
-  >({});
   const [manualPick, setManualPick] = useState<Record<string, string>>({});
   const [status, setStatus] = useState('');
   const [lastPublishedAt, setLastPublishedAt] = useState<string | null>(null);
-  const [sortMode, setSortMode] = useState<'unfilled' | 'date'>('unfilled');
-  const [pendingRemoval, setPendingRemoval] = useState<PendingRemoval | null>(
-    null
-  );
+  const [pendingSaves, setPendingSaves] = useState(0);
+  const saveInProgressRef = useRef(false);
 
   useEffect(() => {
     loadData();
@@ -123,6 +114,7 @@ export default function AssignInvigilatorsPage() {
         id,
         needed,
         session_key,
+        display_label,
         start_time,
         end_time,
         published,
@@ -146,13 +138,16 @@ export default function AssignInvigilatorsPage() {
         needed: slot.needed,
         label: slot.exam_days?.label ?? 'Unknown date',
         date: slot.exam_days?.exam_date ?? '',
-        startTime: slot.start_time ?? null,
-        endTime: slot.end_time ?? null,
         visibleToInvigilators: slot.published === true,
+        displayLabel: slot.display_label ?? formatSessionLabel(slot.session_key),
+        startTime: slot.start_time ? String(slot.start_time).slice(0, 5) : null,
+        endTime: slot.end_time ? String(slot.end_time).slice(0, 5) : null,
       }));
 
     mappedShifts.sort((a, b) => {
       if (a.date !== b.date) return a.date.localeCompare(b.date);
+      const timeCompare = (a.startTime ?? '').localeCompare(b.startTime ?? '');
+      if (timeCompare !== 0) return timeCompare;
       return (sessionOrder[a.session] ?? 99) - (sessionOrder[b.session] ?? 99);
     });
 
@@ -163,7 +158,6 @@ export default function AssignInvigilatorsPage() {
     if (shiftSlotIds.length === 0) {
       setApplicants({});
       setAssigned({});
-      setPublishedAssignments({});
       setSelected({});
       return;
     }
@@ -203,7 +197,7 @@ export default function AssignInvigilatorsPage() {
 
     const { data: assignmentRows, error: assignmentsError } = await supabase
       .from('shift_assignments')
-      .select('shift_slot_id, invigilator_id, published')
+      .select('shift_slot_id, invigilator_id')
       .in('shift_slot_id', shiftSlotIds);
 
     if (assignmentsError) {
@@ -212,7 +206,6 @@ export default function AssignInvigilatorsPage() {
     }
 
     const assignedMap: Record<string, string[]> = {};
-    const publishedAssignmentMap: Record<string, string[]> = {};
 
     (assignmentRows ?? []).forEach((row: any) => {
       if (!assignedMap[row.shift_slot_id]) {
@@ -220,117 +213,168 @@ export default function AssignInvigilatorsPage() {
       }
 
       assignedMap[row.shift_slot_id].push(row.invigilator_id);
-
-      if (row.published) {
-        if (!publishedAssignmentMap[row.shift_slot_id]) {
-          publishedAssignmentMap[row.shift_slot_id] = [];
-        }
-        publishedAssignmentMap[row.shift_slot_id].push(row.invigilator_id);
-      }
     });
 
     setAssigned(assignedMap);
-    setPublishedAssignments(publishedAssignmentMap);
     setSelected(assignedMap);
   }
 
   async function saveAssignmentsForShift(
     shiftId: string,
-    invigilatorIds: string[],
-    removeAvailabilityFor?: string
+    invigilatorIds: string[]
   ) {
-    const { error: deleteError } = await supabase
-      .from('shift_assignments')
-      .delete()
-      .eq('shift_slot_id', shiftId);
+    saveInProgressRef.current = true;
+    setPendingSaves(count => count + 1);
 
-    if (deleteError) {
-      setStatus(deleteError.message);
-      await loadData();
-      return;
-    }
-
-    if (invigilatorIds.length > 0) {
-      const { error: insertError } = await supabase
+    try {
+      const { data: existingRows, error: existingError } = await supabase
         .from('shift_assignments')
-        .insert(
-          invigilatorIds.map(id => ({
-            shift_slot_id: shiftId,
-            invigilator_id: id,
-            published: false,
-          }))
-        );
+        .select('id, invigilator_id')
+        .eq('shift_slot_id', shiftId);
 
-      if (insertError) {
-        setStatus(insertError.message);
+      if (existingError) {
+        setStatus(existingError.message);
         await loadData();
         return;
       }
-    }
 
-    if (removeAvailabilityFor) {
-      const { error: applicationError } = await supabase
-        .from('shift_applications')
-        .delete()
-        .eq('shift_slot_id', shiftId)
-        .eq('invigilator_id', removeAvailabilityFor);
+      const wantedIds = new Set(invigilatorIds);
+      const existingInvigilatorIds = new Set(
+        (existingRows ?? []).map(row => row.invigilator_id)
+      );
+      const assignmentIdsToRemove = (existingRows ?? [])
+        .filter(row => !wantedIds.has(row.invigilator_id))
+        .map(row => row.id);
+      const invigilatorIdsToAdd = invigilatorIds.filter(
+        id => !existingInvigilatorIds.has(id)
+      );
 
-      if (applicationError) {
-        setStatus(applicationError.message);
-        await loadData();
-        return;
+      if (assignmentIdsToRemove.length > 0) {
+        const { error: deleteError } = await supabase
+          .from('shift_assignments')
+          .delete()
+          .in('id', assignmentIdsToRemove);
+
+        if (deleteError) {
+          setStatus(deleteError.message);
+          await loadData();
+          return;
+        }
       }
+
+      if (invigilatorIdsToAdd.length > 0) {
+        const { error: insertError } = await supabase
+          .from('shift_assignments')
+          .insert(
+            invigilatorIdsToAdd.map(id => ({
+              shift_slot_id: shiftId,
+              invigilator_id: id,
+              published: false,
+            }))
+          );
+
+        if (insertError) {
+          setStatus(insertError.message);
+          await loadData();
+          return;
+        }
+
+        const assignedShift = shifts.find(shift => shift.id === shiftId);
+
+        if (
+          assignedShift?.date &&
+          assignedShift.startTime &&
+          assignedShift.endTime
+        ) {
+          const { data: applicationRows, error: applicationError } =
+            await supabase
+              .from('shift_applications')
+              .select(`
+                shift_slot_id,
+                invigilator_id,
+                shift_slots (
+                  start_time,
+                  end_time,
+                  exam_days (
+                    exam_date
+                  )
+                )
+              `)
+              .in('invigilator_id', invigilatorIdsToAdd)
+              .neq('shift_slot_id', shiftId);
+
+          if (applicationError) {
+            setStatus(
+              `Assignments saved, but conflicting applications could not be checked: ${applicationError.message}`
+            );
+            await loadData();
+            return;
+          }
+
+          const conflictingApplications = (applicationRows ?? []).filter(
+            (row: any) => {
+              const applicationDate =
+                row.shift_slots?.exam_days?.exam_date;
+              const applicationStart = row.shift_slots?.start_time
+                ? String(row.shift_slots.start_time).slice(0, 5)
+                : null;
+              const applicationEnd = row.shift_slots?.end_time
+                ? String(row.shift_slots.end_time).slice(0, 5)
+                : null;
+
+              return (
+                applicationDate === assignedShift.date &&
+                applicationStart &&
+                applicationEnd &&
+                timeRangesOverlap(
+                  assignedShift.startTime!,
+                  assignedShift.endTime!,
+                  applicationStart,
+                  applicationEnd
+                )
+              );
+            }
+          );
+
+          // Applications are deliberately retained: an invigilator may apply
+          // for overlapping shifts, while the admin assignment controls
+          // prevent them being allocated to both.
+          for (const application of [] as any[]) {
+            const { error: deleteApplicationError } = await supabase
+              .from('shift_applications')
+              .delete()
+              .eq('shift_slot_id', application.shift_slot_id)
+              .eq('invigilator_id', application.invigilator_id);
+
+            if (deleteApplicationError) {
+              setStatus(
+                `Assignments saved, but a conflicting application could not be removed: ${deleteApplicationError.message}`
+              );
+              await loadData();
+              return;
+            }
+          }
+        }
+      }
+
+      setAssigned(prev => ({
+        ...prev,
+        [shiftId]: invigilatorIds,
+      }));
+
+      setStatus('Assignments auto-saved');
+    } finally {
+      saveInProgressRef.current = false;
+      setPendingSaves(count => Math.max(0, count - 1));
     }
-
-    setAssigned(prev => ({
-      ...prev,
-      [shiftId]: invigilatorIds,
-    }));
-
-    setPublishedAssignments(prev => ({
-      ...prev,
-      [shiftId]: [],
-    }));
-
-    setStatus(
-      removeAvailabilityFor
-        ? 'Assignment and availability removed'
-        : 'Assignments auto-saved'
-    );
-  }
-
-  function requestRemoval(
-    shiftId: string,
-    invigilatorId: string,
-    updatedSelection: string[]
-  ) {
-    const wasPublished = (publishedAssignments[shiftId] ?? []).includes(
-      invigilatorId
-    );
-
-    if (wasPublished) {
-      setPendingRemoval({ shiftId, invigilatorId, updatedSelection });
-      return;
-    }
-
-    setSelected(prev => ({ ...prev, [shiftId]: updatedSelection }));
-    void saveAssignmentsForShift(shiftId, updatedSelection);
-  }
-
-  async function confirmRemoval(removeAvailability: boolean) {
-    if (!pendingRemoval) return;
-
-    const { shiftId, invigilatorId, updatedSelection } = pendingRemoval;
-    setPendingRemoval(null);
-    setSelected(prev => ({ ...prev, [shiftId]: updatedSelection }));
-    await saveAssignmentsForShift(
-      shiftId,
-      updatedSelection,
-      removeAvailability ? invigilatorId : undefined
-    );
   }
 
   async function toggle(shiftId: string, invigilatorId: string) {
+    if (saveInProgressRef.current) {
+      setStatus('Please wait for the current assignment change to finish saving.');
+      return;
+    }
+
     const current = selected[shiftId] ?? [];
     const exists = current.includes(invigilatorId);
     const shift = shifts.find(s => s.id === shiftId);
@@ -343,9 +387,7 @@ export default function AssignInvigilatorsPage() {
     }
 
     if (!exists && isAssignedToOverlappingShift(shiftId, invigilatorId)) {
-      setStatus(
-        'This invigilator is already assigned to an overlapping shift.'
-      );
+      setStatus('This invigilator is already assigned to an overlapping shift.');
       return;
     }
 
@@ -353,16 +395,20 @@ export default function AssignInvigilatorsPage() {
       ? current.filter(id => id !== invigilatorId)
       : [...current, invigilatorId];
 
-    if (exists) {
-      requestRemoval(shiftId, invigilatorId, updated);
-      return;
-    }
+    setSelected(prev => ({
+      ...prev,
+      [shiftId]: updated,
+    }));
 
-    setSelected(prev => ({ ...prev, [shiftId]: updated }));
     await saveAssignmentsForShift(shiftId, updated);
   }
 
   async function addManualInvigilator(shiftId: string) {
+    if (saveInProgressRef.current) {
+      setStatus('Please wait for the current assignment change to finish saving.');
+      return;
+    }
+
     const invigilatorId = manualPick[shiftId];
 
     if (!invigilatorId) {
@@ -386,9 +432,7 @@ export default function AssignInvigilatorsPage() {
     }
 
     if (isAssignedToOverlappingShift(shiftId, invigilatorId)) {
-      setStatus(
-        'This invigilator is already assigned to an overlapping shift.'
-      );
+      setStatus('This invigilator is already assigned to an overlapping shift.');
       return;
     }
 
@@ -411,24 +455,34 @@ export default function AssignInvigilatorsPage() {
     shiftId: string,
     invigilatorId: string
   ) {
+    if (saveInProgressRef.current) {
+      setStatus('Please wait for the current assignment change to finish saving.');
+      return;
+    }
+
     const current = selected[shiftId] ?? [];
     const updated = current.filter(id => id !== invigilatorId);
 
-    requestRemoval(shiftId, invigilatorId, updated);
+    setSelected(prev => ({
+      ...prev,
+      [shiftId]: updated,
+    }));
+
+    await saveAssignmentsForShift(shiftId, updated);
   }
 
   async function publishAll() {
+    if (saveInProgressRef.current || pendingSaves > 0) {
+      setStatus('Please wait for the current assignment changes to finish saving.');
+      return;
+    }
+
     setStatus('Publishing assignments...');
 
     const shiftSlotIds = shifts.map(shift => shift.id);
 
     if (shiftSlotIds.length === 0) {
       setStatus('No assignments to publish');
-      return;
-    }
-
-    if (!currentSeason?.id) {
-      setStatus('Please select a season before publishing assignments');
       return;
     }
 
@@ -444,56 +498,6 @@ export default function AssignInvigilatorsPage() {
       return;
     }
 
-    const { data: currentAssignments, error: currentAssignmentsError } =
-      await supabase
-        .from('shift_assignments')
-        .select('shift_slot_id, invigilator_id')
-        .in('shift_slot_id', shiftSlotIds);
-
-    if (currentAssignmentsError) {
-      setStatus(currentAssignmentsError.message);
-      return;
-    }
-
-    const { data: previousAssignments, error: previousAssignmentsError } =
-      await supabase
-        .from('published_shift_assignments')
-        .select('shift_slot_id, invigilator_id')
-        .eq('season_id', currentSeason.id);
-
-    if (previousAssignmentsError) {
-      setStatus(
-        `Unable to check previous allocations: ${previousAssignmentsError.message}`
-      );
-      return;
-    }
-
-    const currentAssignmentKeys = new Set(
-      (currentAssignments ?? []).map(
-        assignment => `${assignment.shift_slot_id}:${assignment.invigilator_id}`
-      )
-    );
-    const previousAssignmentKeys = new Set(
-      (previousAssignments ?? []).map(
-        assignment => `${assignment.shift_slot_id}:${assignment.invigilator_id}`
-      )
-    );
-    const affectedInvigilatorIds = new Set<string>();
-
-    (currentAssignments ?? []).forEach(assignment => {
-      const key = `${assignment.shift_slot_id}:${assignment.invigilator_id}`;
-      if (!previousAssignmentKeys.has(key)) {
-        affectedInvigilatorIds.add(assignment.invigilator_id);
-      }
-    });
-
-    (previousAssignments ?? []).forEach(assignment => {
-      const key = `${assignment.shift_slot_id}:${assignment.invigilator_id}`;
-      if (!currentAssignmentKeys.has(key)) {
-        affectedInvigilatorIds.add(assignment.invigilator_id);
-      }
-    });
-
     const { error: publishError } = await supabase
       .from('shift_assignments')
       .update({ published: true })
@@ -506,63 +510,47 @@ export default function AssignInvigilatorsPage() {
 
     const publishTime = new Date().toISOString();
 
-    const { error: clearSnapshotError } = await supabase
-      .from('published_shift_assignments')
-      .delete()
-      .eq('season_id', currentSeason.id);
+    if (currentSeason?.id) {
+      await supabase
+        .from('seasons')
+        .update({ last_published_at: publishTime })
+        .eq('id', currentSeason.id);
 
-    if (clearSnapshotError) {
-      setStatus(`Assignments published, but the rota snapshot could not be saved: ${clearSnapshotError.message}`);
-      return;
-    }
+      setLastPublishedAt(publishTime);
 
-    if ((currentAssignments ?? []).length > 0) {
-      const { error: saveSnapshotError } = await supabase
-        .from('published_shift_assignments')
-        .insert(
-          currentAssignments.map(assignment => ({
-            season_id: currentSeason.id,
-            shift_slot_id: assignment.shift_slot_id,
-            invigilator_id: assignment.invigilator_id,
-          }))
-        );
+      const newlyAssignedInvigilatorIds = Array.from(
+        new Set(
+          (unpublishedAssignments ?? []).map(
+            assignment => assignment.invigilator_id
+          )
+        )
+      );
 
-      if (saveSnapshotError) {
-        setStatus(`Assignments published, but the rota snapshot could not be saved: ${saveSnapshotError.message}`);
-        return;
+      if (newlyAssignedInvigilatorIds.length > 0) {
+        const { error: notificationError } = await supabase
+          .from('invigilator_shift_notifications')
+          .insert(
+            newlyAssignedInvigilatorIds.map(invigilatorId => ({
+              season_id: currentSeason.id,
+              invigilator_id: invigilatorId,
+              notification_type: 'assignments_published',
+              title: 'You have new assigned shifts',
+              message:
+                'New shifts have been assigned to you. Visit My Shifts to review them.',
+            }))
+          );
+
+        if (notificationError) {
+          setStatus(
+            `Assignments published, but notifications could not be created: ${notificationError.message}`
+          );
+          await loadData();
+          return;
+        }
       }
     }
 
-    if (affectedInvigilatorIds.size > 0) {
-      const { error: notificationError } = await supabase
-        .from('notifications')
-        .insert(
-          Array.from(affectedInvigilatorIds).map(invigilatorId => ({
-            invigilator_id: invigilatorId,
-            title: 'Your rota has changed',
-            message:
-              'Your shift allocation has been updated. Please check My Shifts for the latest rota.',
-            is_read: false,
-          }))
-        );
-
-      if (notificationError) {
-        setStatus(`Assignments published, but notifications could not be created: ${notificationError.message}`);
-        return;
-      }
-    }
-
-    await supabase
-      .from('seasons')
-      .update({ last_published_at: publishTime })
-      .eq('id', currentSeason.id);
-
-    setLastPublishedAt(publishTime);
-    setStatus(
-      affectedInvigilatorIds.size > 0
-        ? `Assignments published and ${affectedInvigilatorIds.size} invigilator${affectedInvigilatorIds.size === 1 ? '' : 's'} notified`
-        : 'Assignments published — no allocation changes to notify'
-    );
+    setStatus('All assignments published');
     await loadData();
   }
 
@@ -572,21 +560,6 @@ export default function AssignInvigilatorsPage() {
     );
   }
 
-  function shiftsOverlap(first: Shift, second: Shift) {
-    if (
-      first.id === second.id ||
-      first.date !== second.date ||
-      !first.startTime ||
-      !first.endTime ||
-      !second.startTime ||
-      !second.endTime
-    ) {
-      return false;
-    }
-
-    return first.startTime < second.endTime && second.startTime < first.endTime;
-  }
-
   function isAssignedToOverlappingShift(
     shiftId: string,
     invigilatorId: string
@@ -594,10 +567,20 @@ export default function AssignInvigilatorsPage() {
     const shift = shifts.find(item => item.id === shiftId);
 
     return Boolean(
-      shift &&
+      shift?.startTime &&
+        shift.endTime &&
         shifts.some(
           otherShift =>
-            shiftsOverlap(shift, otherShift) &&
+            otherShift.id !== shiftId &&
+            otherShift.date === shift.date &&
+            otherShift.startTime &&
+            otherShift.endTime &&
+            timeRangesOverlap(
+              shift.startTime!,
+              shift.endTime!,
+              otherShift.startTime,
+              otherShift.endTime
+            ) &&
             (selected[otherShift.id] ?? []).includes(invigilatorId)
         )
     );
@@ -611,11 +594,6 @@ export default function AssignInvigilatorsPage() {
   }
 
   const sortedShifts = [...shifts].sort((a, b) => {
-    if (sortMode === 'date') {
-      if (a.date !== b.date) return a.date.localeCompare(b.date);
-      return (sessionOrder[a.session] ?? 99) - (sessionOrder[b.session] ?? 99);
-    }
-
     const aAssigned = assigned[a.id]?.length ?? 0;
     const bAssigned = assigned[b.id]?.length ?? 0;
 
@@ -656,7 +634,8 @@ export default function AssignInvigilatorsPage() {
       >
         <h1 style={{ margin: 0, fontSize: 32 }}>Assign Invigilators</h1>
         <p style={{ marginTop: 10, marginBottom: 0, opacity: 0.95 }}>
-          Assign applicants or manually add invigilators.
+          Assign invigilators before or after publishing. Private shifts stay
+          hidden from invigilators until you publish them.
         </p>
       </div>
 
@@ -682,62 +661,21 @@ export default function AssignInvigilatorsPage() {
           flexWrap: 'wrap',
         }}
       >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            fontWeight: 700,
-          }}
-        >
-          <span>Sort shifts by</span>
-          <div
-            style={{
-              display: 'flex',
-              padding: 3,
-              borderRadius: 10,
-              border: '1px solid #c4b5fd',
-              background: 'white',
-            }}
-          >
-            <button
-              onClick={() => setSortMode('unfilled')}
-              aria-pressed={sortMode === 'unfilled'}
-              style={{
-                ...sortToggleButton,
-                background: sortMode === 'unfilled' ? '#4c1d95' : 'transparent',
-                color: sortMode === 'unfilled' ? 'white' : '#4c1d95',
-              }}
-            >
-              Unfilled first
-            </button>
-            <button
-              onClick={() => setSortMode('date')}
-              aria-pressed={sortMode === 'date'}
-              style={{
-                ...sortToggleButton,
-                background: sortMode === 'date' ? '#4c1d95' : 'transparent',
-                color: sortMode === 'date' ? 'white' : '#4c1d95',
-              }}
-            >
-              Date order
-            </button>
-          </div>
-        </div>
-
         <button
           onClick={publishAll}
+          disabled={pendingSaves > 0}
           style={{
             background: '#4c1d95',
             color: 'white',
             border: 'none',
             padding: '10px 14px',
             borderRadius: 10,
-            cursor: 'pointer',
+            cursor: pendingSaves > 0 ? 'not-allowed' : 'pointer',
             fontWeight: 700,
+            opacity: pendingSaves > 0 ? 0.6 : 1,
           }}
         >
-          Publish assignments
+          {pendingSaves > 0 ? 'Saving assignments…' : 'Publish assignments'}
         </button>
 
         {status && (
@@ -786,14 +724,21 @@ export default function AssignInvigilatorsPage() {
                 style={{
                   background: 'white',
                   border:
-                    remaining > 0 ? '3px solid #dc2626' : '1px solid #e5e7eb',
+                    remaining > 0 ? '4px solid #dc2626' : '1px solid #e5e7eb',
                   padding: 20,
                   borderRadius: 16,
-                  boxShadow: '0 4px 14px rgba(0,0,0,0.06)',
+                  boxShadow:
+                    remaining > 0
+                      ? '0 4px 16px rgba(220,38,38,0.18)'
+                      : '0 4px 14px rgba(0,0,0,0.06)',
                 }}
               >
                 <h3 style={{ marginTop: 0, color: '#4c1d95' }}>
-                  {shift.label} - {formatSessionLabel(shift.session)} (
+                  {shift.label} - {shift.displayLabel}
+                  {shift.startTime && shift.endTime
+                    ? ` (${shift.startTime}–${shift.endTime})`
+                    : ''}{' '}
+                  (
                   {assignedCount}/{shift.needed} assigned)
                 </h3>
 
@@ -858,8 +803,9 @@ export default function AssignInvigilatorsPage() {
                             app.invigilator_id
                           );
                         const isDisabled =
-                          !isChecked &&
-                          (limitReached || hasOverlappingAssignment);
+                          pendingSaves > 0 ||
+                          (!isChecked &&
+                            (limitReached || hasOverlappingAssignment));
 
                         return (
                           <label
@@ -933,14 +879,17 @@ export default function AssignInvigilatorsPage() {
 
                           <button
                             onClick={() => removeManualInvigilator(shift.id, id)}
+                            disabled={pendingSaves > 0}
                             style={{
                               background: '#fee2e2',
                               color: '#991b1b',
                               border: '1px solid #fecaca',
                               borderRadius: 8,
                               padding: '5px 8px',
-                              cursor: 'pointer',
+                              cursor:
+                                pendingSaves > 0 ? 'not-allowed' : 'pointer',
                               fontWeight: 700,
+                              opacity: pendingSaves > 0 ? 0.6 : 1,
                             }}
                           >
                             Remove
@@ -965,6 +914,7 @@ export default function AssignInvigilatorsPage() {
 
                   <select
                     value={manualPick[shift.id] ?? ''}
+                    disabled={pendingSaves > 0}
                     onChange={e =>
                       setManualPick(prev => ({
                         ...prev,
@@ -994,14 +944,16 @@ export default function AssignInvigilatorsPage() {
 
                   <button
                     onClick={() => addManualInvigilator(shift.id)}
+                    disabled={pendingSaves > 0}
                     style={{
                       background: '#4c1d95',
                       color: 'white',
                       border: 'none',
                       padding: '9px 12px',
                       borderRadius: 8,
-                      cursor: 'pointer',
+                      cursor: pendingSaves > 0 ? 'not-allowed' : 'pointer',
                       fontWeight: 700,
+                      opacity: pendingSaves > 0 ? 0.6 : 1,
                     }}
                   >
                     Add
@@ -1012,98 +964,6 @@ export default function AssignInvigilatorsPage() {
           })}
         </div>
       )}
-
-      {pendingRemoval && (
-        <div style={modalBackdrop} role="presentation">
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="removal-dialog-title"
-            style={modalCard}
-          >
-            <h2 id="removal-dialog-title" style={{ marginTop: 0, color: '#4c1d95' }}>
-              Remove {getInvigilatorName(pendingRemoval.invigilatorId)}?
-            </h2>
-            <p style={{ color: '#374151', lineHeight: 1.5 }}>
-              This assignment has already been published. Would you like to keep
-              this invigilator available for the shift, or remove their
-              availability completely?
-            </p>
-            <p style={{ color: '#6b7280', lineHeight: 1.5, marginBottom: 20 }}>
-              Removing availability means they will no longer appear as an
-              applicant and would need to reapply or be added manually again.
-            </p>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              <button
-                onClick={() => confirmRemoval(false)}
-                style={secondaryModalButton}
-              >
-                Keep available
-              </button>
-              <button
-                onClick={() => confirmRemoval(true)}
-                style={dangerModalButton}
-              >
-                Remove availability
-              </button>
-              <button
-                onClick={() => setPendingRemoval(null)}
-                style={cancelModalButton}
-              >
-                Cancel
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
     </div>
   );
 }
-
-const modalBackdrop: React.CSSProperties = {
-  position: 'fixed',
-  inset: 0,
-  display: 'grid',
-  placeItems: 'center',
-  padding: 20,
-  background: 'rgba(17, 24, 39, 0.45)',
-  zIndex: 20,
-};
-
-const modalCard: React.CSSProperties = {
-  width: 'min(100%, 520px)',
-  background: 'white',
-  borderRadius: 16,
-  padding: 24,
-  boxShadow: '0 18px 40px rgba(0,0,0,0.25)',
-};
-
-const secondaryModalButton: React.CSSProperties = {
-  background: '#4c1d95',
-  color: 'white',
-  border: 'none',
-  borderRadius: 8,
-  padding: '10px 12px',
-  cursor: 'pointer',
-  fontWeight: 700,
-};
-
-const dangerModalButton: React.CSSProperties = {
-  background: '#991b1b',
-  color: 'white',
-  border: 'none',
-  borderRadius: 8,
-  padding: '10px 12px',
-  cursor: 'pointer',
-  fontWeight: 700,
-};
-
-const cancelModalButton: React.CSSProperties = {
-  background: 'white',
-  color: '#374151',
-  border: '1px solid #d1d5db',
-  borderRadius: 8,
-  padding: '10px 12px',
-  cursor: 'pointer',
-  fontWeight: 700,
-};

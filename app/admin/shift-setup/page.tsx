@@ -19,6 +19,46 @@ type ExamDay = {
   sessions: Record<SessionKey, DaySession>;
 };
 
+type StaffingRules = {
+  candidatesPerInvigilator: number;
+  additionalInvigilatorsPerRoom: number;
+  minimumInvigilatorsPerRoom: number;
+  singleCandidateNeedsOne: boolean;
+};
+
+type RoomStaffingRules = Record<string, StaffingRules | null>;
+
+type ExtraShiftSlot = {
+  id: string;
+  examDayId: string;
+  sessionKey: string;
+  label: string;
+  startTime: string;
+  endTime: string;
+  needed: number;
+};
+
+const defaultStaffingRules: StaffingRules = {
+  candidatesPerInvigilator: 30,
+  additionalInvigilatorsPerRoom: 1,
+  minimumInvigilatorsPerRoom: 1,
+  singleCandidateNeedsOne: true,
+};
+
+function calculateInvigilatorsNeeded(
+  candidateCount: number,
+  rules: StaffingRules
+) {
+  if (candidateCount < 1) return 0;
+  if (candidateCount === 1 && rules.singleCandidateNeedsOne) return 1;
+
+  return Math.max(
+    rules.minimumInvigilatorsPerRoom,
+    Math.ceil(candidateCount / rules.candidatesPerInvigilator) +
+      rules.additionalInvigilatorsPerRoom
+  );
+}
+
 function formatDateLabel(dateStr: string) {
   return formatLongDate(dateStr);
 }
@@ -86,6 +126,41 @@ function sessionLabel(session: SessionKey) {
   return session.charAt(0).toUpperCase() + session.slice(1);
 }
 
+const standardSessionTimes: Record<SessionKey, { start: string; end: string }> = {
+  morning: { start: '09:00', end: '11:30' },
+  mid: { start: '11:30', end: '13:00' },
+  afternoon: { start: '13:00', end: '15:30' },
+};
+
+function sessionFromStartTime(start: string): SessionKey {
+  const [hours, minutes] = (start || '00:00').split(':').map(Number);
+  const startMinutes = hours * 60 + minutes;
+
+  if (startMinutes >= 12 * 60 + 45) return 'afternoon';
+  if (startMinutes >= 11 * 60) return 'mid';
+  return 'morning';
+}
+
+function timeToMinutes(time: string) {
+  const [hours, minutes] = (time || '00:00').split(':').map(Number);
+  return hours * 60 + minutes;
+}
+
+function minutesToTime(total: number) {
+  const hours = Math.floor(total / 60) % 24;
+  const minutes = Math.round(total % 60);
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+}
+
+function extraSessionKey(start: string) {
+  return `extra_${start.replace(':', '')}`;
+}
+
+function parseDurationMinutes(value: string) {
+  const match = String(value || '').match(/\d+/);
+  return match ? Number(match[0]) : 0;
+}
+
 export default function ShiftSetupPage() {
   const { currentSeason } = useContext(SeasonContext);
 
@@ -98,13 +173,238 @@ export default function ShiftSetupPage() {
   const [status, setStatus] = useState('');
   const [lastPublishedAt, setLastPublishedAt] = useState<string | null>(null);
   const [uploadingRooms, setUploadingRooms] = useState(false);
+  const [staffingRules, setStaffingRules] =
+    useState<StaffingRules>(defaultStaffingRules);
+  const [savingRules, setSavingRules] = useState(false);
+  const [identifiedRooms, setIdentifiedRooms] = useState<string[]>([]);
+  const [roomStaffingRules, setRoomStaffingRules] =
+    useState<RoomStaffingRules>({});
+  const [savingRoomRules, setSavingRoomRules] = useState(false);
+  const [extraShiftSlots, setExtraShiftSlots] = useState<ExtraShiftSlot[]>([]);
+  const [pendingRoomUpload, setPendingRoomUpload] = useState<{
+    headers: string[];
+    rows: string[][];
+    alternativeStarts: string[];
+  } | null>(null);
 
   useEffect(() => {
     if (currentSeason?.id) {
       loadDays();
       loadSeasonPublishInfo();
+      loadStaffingRules();
+      loadRoomStaffingRules();
     }
   }, [currentSeason?.id]);
+
+  async function loadStaffingRules() {
+    if (!currentSeason?.id) return;
+
+    const { data, error } = await supabase
+      .from('staffing_rules')
+      .select(
+        'candidates_per_invigilator, additional_invigilators_per_room, minimum_invigilators_per_room, single_candidate_needs_one'
+      )
+      .eq('season_id', currentSeason.id)
+      .maybeSingle();
+
+    if (error) {
+      setStatus(error.message);
+      return;
+    }
+
+    setStaffingRules(
+      data
+        ? {
+            candidatesPerInvigilator: data.candidates_per_invigilator,
+            additionalInvigilatorsPerRoom:
+              data.additional_invigilators_per_room,
+            minimumInvigilatorsPerRoom: data.minimum_invigilators_per_room,
+            singleCandidateNeedsOne:
+              data.single_candidate_needs_one ?? true,
+          }
+        : defaultStaffingRules
+    );
+  }
+
+  function updateStaffingRule(key: keyof StaffingRules, value: string) {
+    setStaffingRules(current => ({
+      ...current,
+      [key]: value === '' ? 0 : Number(value),
+    }));
+  }
+
+  async function saveStaffingRules() {
+    if (!currentSeason?.id) return;
+
+    if (
+      !Number.isInteger(staffingRules.candidatesPerInvigilator) ||
+      staffingRules.candidatesPerInvigilator < 1 ||
+      !Number.isInteger(staffingRules.additionalInvigilatorsPerRoom) ||
+      staffingRules.additionalInvigilatorsPerRoom < 0 ||
+      !Number.isInteger(staffingRules.minimumInvigilatorsPerRoom) ||
+      staffingRules.minimumInvigilatorsPerRoom < 1
+    ) {
+      setStatus('Enter whole numbers. Candidates and minimum must be at least 1.');
+      return;
+    }
+
+    setSavingRules(true);
+    setStatus('Saving staffing rules...');
+
+    const { error } = await supabase.from('staffing_rules').upsert(
+      {
+        season_id: currentSeason.id,
+        candidates_per_invigilator:
+          staffingRules.candidatesPerInvigilator,
+        additional_invigilators_per_room:
+          staffingRules.additionalInvigilatorsPerRoom,
+        minimum_invigilators_per_room:
+          staffingRules.minimumInvigilatorsPerRoom,
+        single_candidate_needs_one:
+          staffingRules.singleCandidateNeedsOne,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'season_id' }
+    );
+
+    setSavingRules(false);
+    setStatus(error ? error.message : 'Staffing rules saved.');
+  }
+
+  async function loadRoomStaffingRules() {
+    if (!currentSeason?.id) return;
+
+    const [{ data: roomRows, error: roomsError }, { data: ruleRows, error: rulesError }] =
+      await Promise.all([
+        supabase
+          .from('room_requirements')
+          .select('room_name')
+          .eq('season_id', currentSeason.id),
+        supabase
+          .from('staffing_room_rules')
+          .select(
+            'room_name, candidates_per_invigilator, additional_invigilators_per_room, minimum_invigilators_per_room, single_candidate_needs_one'
+          )
+          .eq('season_id', currentSeason.id),
+      ]);
+
+    if (roomsError) {
+      setStatus(roomsError.message);
+      return;
+    }
+
+    const roomNames = Array.from(
+      new Set(
+        (roomRows ?? [])
+          .map(row => row.room_name?.trim())
+          .filter((name): name is string => Boolean(name))
+      )
+    ).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+    const loadedRules: RoomStaffingRules = {};
+    roomNames.forEach(roomName => {
+      loadedRules[roomName] = null;
+    });
+
+    (rulesError ? [] : ruleRows ?? []).forEach(rule => {
+      if (!roomNames.includes(rule.room_name)) return;
+
+      loadedRules[rule.room_name] = {
+        candidatesPerInvigilator: rule.candidates_per_invigilator,
+        additionalInvigilatorsPerRoom:
+          rule.additional_invigilators_per_room,
+        minimumInvigilatorsPerRoom: rule.minimum_invigilators_per_room,
+        singleCandidateNeedsOne:
+          rule.single_candidate_needs_one ?? true,
+      };
+    });
+
+    setIdentifiedRooms(roomNames);
+    setRoomStaffingRules(loadedRules);
+  }
+
+  function setRoomOverride(roomName: string, enabled: boolean) {
+    setRoomStaffingRules(current => ({
+      ...current,
+      [roomName]: enabled ? { ...staffingRules } : null,
+    }));
+  }
+
+  function updateRoomStaffingRule(
+    roomName: string,
+    key: keyof StaffingRules,
+    value: string
+  ) {
+    setRoomStaffingRules(current => ({
+      ...current,
+      [roomName]: {
+        ...(current[roomName] ?? staffingRules),
+        [key]: value === '' ? 0 : Number(value),
+      },
+    }));
+  }
+
+  async function saveRoomStaffingRules() {
+    if (!currentSeason?.id) return;
+
+    const overrides = Object.entries(roomStaffingRules).filter(
+      (entry): entry is [string, StaffingRules] => entry[1] !== null
+    );
+
+    const invalidRule = overrides.some(
+      ([, rules]) =>
+        !Number.isInteger(rules.candidatesPerInvigilator) ||
+        rules.candidatesPerInvigilator < 1 ||
+        !Number.isInteger(rules.additionalInvigilatorsPerRoom) ||
+        rules.additionalInvigilatorsPerRoom < 0 ||
+        !Number.isInteger(rules.minimumInvigilatorsPerRoom) ||
+        rules.minimumInvigilatorsPerRoom < 1
+    );
+
+    if (invalidRule) {
+      setStatus('Enter valid whole numbers for every room override.');
+      return;
+    }
+
+    setSavingRoomRules(true);
+    setStatus('Saving room rules...');
+
+    const { error: deleteError } = await supabase
+      .from('staffing_room_rules')
+      .delete()
+      .eq('season_id', currentSeason.id);
+
+    if (deleteError) {
+      setSavingRoomRules(false);
+      setStatus(deleteError.message);
+      return;
+    }
+
+    if (overrides.length > 0) {
+      const { error: insertError } = await supabase
+        .from('staffing_room_rules')
+        .insert(
+          overrides.map(([roomName, rules]) => ({
+            season_id: currentSeason.id,
+            room_name: roomName,
+            candidates_per_invigilator: rules.candidatesPerInvigilator,
+            additional_invigilators_per_room:
+              rules.additionalInvigilatorsPerRoom,
+            minimum_invigilators_per_room: rules.minimumInvigilatorsPerRoom,
+            single_candidate_needs_one: rules.singleCandidateNeedsOne,
+          }))
+        );
+
+      if (insertError) {
+        setSavingRoomRules(false);
+        setStatus(insertError.message);
+        return;
+      }
+    }
+
+    setSavingRoomRules(false);
+    setStatus('Room staffing rules saved.');
+  }
 
   async function loadSeasonPublishInfo() {
     if (!currentSeason?.id) return;
@@ -160,6 +460,32 @@ export default function ShiftSetupPage() {
       }
 
       sessionRows = data ?? [];
+
+      const { data: extraRows, error: extraError } = await supabase
+        .from('shift_slots')
+        .select('id, exam_day_id, session_key, display_label, start_time, end_time, needed')
+        .in('exam_day_id', dayIds)
+        .like('session_key', 'extra_%');
+
+      if (extraError) {
+        setStatus(extraError.message);
+        setLoading(false);
+        return;
+      }
+
+      setExtraShiftSlots(
+        (extraRows ?? []).map(row => ({
+          id: row.id,
+          examDayId: row.exam_day_id,
+          sessionKey: row.session_key,
+          label: row.display_label ?? `Extra session – ${String(row.start_time).slice(0, 5)}`,
+          startTime: String(row.start_time ?? '').slice(0, 5),
+          endTime: String(row.end_time ?? '').slice(0, 5),
+          needed: row.needed,
+        }))
+      );
+    } else {
+      setExtraShiftSlots([]);
     }
 
     const mappedDays: ExamDay[] = (dayRows ?? []).map(day => {
@@ -201,16 +527,23 @@ export default function ShiftSetupPage() {
     sessionKey: SessionKey,
     sessionData: DaySession
   ) {
-    const { data: existingSlot } = await supabase
+    const { data: existingSlot, error: lookupError } = await supabase
       .from('shift_slots')
       .select('id')
       .eq('exam_day_id', examDayId)
       .eq('session_key', sessionKey)
       .maybeSingle();
 
+    if (lookupError) throw new Error(lookupError.message);
+
     if (!sessionData.enabled) {
       if (existingSlot?.id) {
-        await supabase.from('shift_slots').delete().eq('id', existingSlot.id);
+        const { error: deleteError } = await supabase
+          .from('shift_slots')
+          .delete()
+          .eq('id', existingSlot.id);
+
+        if (deleteError) throw new Error(deleteError.message);
       }
       return;
     }
@@ -218,17 +551,78 @@ export default function ShiftSetupPage() {
     if (sessionData.needed < 1) return;
 
     if (existingSlot?.id) {
-      await supabase
+      const { error: updateError } = await supabase
         .from('shift_slots')
-        .update({ needed: sessionData.needed })
+        .update({
+          needed: sessionData.needed,
+          start_time: standardSessionTimes[sessionKey].start,
+          end_time: standardSessionTimes[sessionKey].end,
+          display_label: sessionLabel(sessionKey),
+        })
         .eq('id', existingSlot.id);
+
+      if (updateError) throw new Error(updateError.message);
     } else {
-      await supabase.from('shift_slots').insert({
+      const { error: insertError } = await supabase.from('shift_slots').insert({
         exam_day_id: examDayId,
         session_key: sessionKey,
         needed: sessionData.needed,
         published: false,
+        start_time: standardSessionTimes[sessionKey].start,
+        end_time: standardSessionTimes[sessionKey].end,
+        display_label: sessionLabel(sessionKey),
       });
+
+      if (insertError) throw new Error(insertError.message);
+    }
+  }
+
+  function changeExtraNeeded(slotId: string, value: string) {
+    const numericValue = value.replace(/\D/g, '');
+    setExtraShiftSlots(current =>
+      current.map(slot =>
+        slot.id === slotId
+          ? { ...slot, needed: numericValue === '' ? 0 : Number(numericValue) }
+          : slot
+      )
+    );
+  }
+
+  async function saveExtraNeeded(slotId: string) {
+    const slot = extraShiftSlots.find(item => item.id === slotId);
+    if (!slot || slot.needed < 1) {
+      setStatus('Additional session staffing must be at least 1.');
+      await loadDays();
+      return;
+    }
+
+    setStatus('Saving additional session...');
+    const { error } = await supabase
+      .from('shift_slots')
+      .update({ needed: slot.needed })
+      .eq('id', slotId);
+
+    setStatus(error ? error.message : 'Additional session saved.');
+    if (error) await loadDays();
+  }
+
+  async function openPrivateAssignments() {
+    try {
+      setStatus('Preparing private shifts...');
+
+      for (const day of days) {
+        for (const session of Object.keys(day.sessions) as SessionKey[]) {
+          await syncShiftSlot(day.id, session, day.sessions[session]);
+        }
+      }
+
+      window.location.href = '/admin/assign-invigilators';
+    } catch (error) {
+      setStatus(
+        error instanceof Error
+          ? `Could not prepare shifts: ${error.message}`
+          : 'Could not prepare shifts'
+      );
     }
   }
 
@@ -371,35 +765,16 @@ export default function ShiftSetupPage() {
         return;
       }
 
-      const { data: seasonSlots, error: slotsError } = await supabase
+      const { data: newlyPublishedSlots, error: newSlotsError } = await supabase
         .from('shift_slots')
-        .select('id, needed, published')
-        .in('exam_day_id', seasonDayIds);
+        .select('id')
+        .in('exam_day_id', seasonDayIds)
+        .eq('published', false);
 
-      if (slotsError) {
-        setStatus(slotsError.message);
+      if (newSlotsError) {
+        setStatus(newSlotsError.message);
         return;
       }
-
-      const { data: previousAvailability, error: availabilityError } =
-        await supabase
-          .from('published_shift_availability')
-          .select('shift_slot_id, needed')
-          .eq('season_id', currentSeason.id);
-
-      if (availabilityError) {
-        setStatus(`Unable to check previous shift availability: ${availabilityError.message}`);
-        return;
-      }
-
-      const previousNeededBySlot = new Map(
-        (previousAvailability ?? []).map(row => [row.shift_slot_id, row.needed])
-      );
-      const slotsWithNewAvailability = (seasonSlots ?? []).filter(slot => {
-        const previousNeeded = previousNeededBySlot.get(slot.id);
-        return slot.published === false || previousNeeded === undefined || slot.needed > previousNeeded;
-      });
-      const hasNewAvailability = slotsWithNewAvailability.length > 0;
 
       const { error: publishError } = await supabase
         .from('shift_slots')
@@ -411,90 +786,41 @@ export default function ShiftSetupPage() {
         return;
       }
 
-      const { error: clearAvailabilityError } = await supabase
-        .from('published_shift_availability')
-        .delete()
-        .eq('season_id', currentSeason.id);
-
-      if (clearAvailabilityError) {
-        setStatus(`Shifts published, but the availability snapshot could not be saved: ${clearAvailabilityError.message}`);
-        return;
-      }
-
-      if ((seasonSlots ?? []).length > 0) {
-        const { error: saveAvailabilityError } = await supabase
-          .from('published_shift_availability')
-          .insert(
-            seasonSlots.map(slot => ({
-              season_id: currentSeason.id,
-              shift_slot_id: slot.id,
-              needed: slot.needed,
-            }))
-          );
-
-        if (saveAvailabilityError) {
-          setStatus(`Shifts published, but the availability snapshot could not be saved: ${saveAvailabilityError.message}`);
-          return;
-        }
-      }
-
-      if (hasNewAvailability) {
-        const { data: existingAssignments, error: assignmentsError } =
-          await supabase
-            .from('shift_assignments')
-            .select('invigilator_id')
-            .in(
-              'shift_slot_id',
-              slotsWithNewAvailability.map(slot => slot.id)
-            );
-
-        if (assignmentsError) {
-          setStatus(`Shifts published, but notifications could not be created: ${assignmentsError.message}`);
-          return;
-        }
-
-        const alreadyAssignedIds = new Set(
-          (existingAssignments ?? []).map(assignment => assignment.invigilator_id)
-        );
-        const { data: invigilators, error: invigilatorsError } = await supabase
-          .from('invigilators')
-          .select('id')
-          .eq('active', true);
-
-        if (invigilatorsError) {
-          setStatus(`Shifts published, but notifications could not be created: ${invigilatorsError.message}`);
-          return;
-        }
-
-        const invigilatorsToNotify = (invigilators ?? []).filter(
-          invigilator => !alreadyAssignedIds.has(invigilator.id)
-        );
-
-        if (invigilatorsToNotify.length > 0) {
-          const { error: notificationError } = await supabase
-            .from('notifications')
-            .insert(
-              invigilatorsToNotify.map(invigilator => ({
-                invigilator_id: invigilator.id,
-                title: 'New shifts available',
-                message: 'New shifts are available to view and apply for.',
-                is_read: false,
-              }))
-            );
-
-          if (notificationError) {
-            setStatus(`Shifts published, but notifications could not be created: ${notificationError.message}`);
-            return;
-          }
-        }
-      }
-
       const publishTime = new Date().toISOString();
 
       await supabase
         .from('seasons')
         .update({ last_published_at: publishTime })
         .eq('id', currentSeason.id);
+
+      if ((newlyPublishedSlots ?? []).length > 0) {
+        const { data: activeInvigilators } = await supabase
+          .from('invigilators')
+          .select('id')
+          .eq('active', true);
+
+        if ((activeInvigilators ?? []).length > 0) {
+          const { error: notificationError } = await supabase
+            .from('invigilator_shift_notifications')
+            .insert(
+              (activeInvigilators ?? []).map(invigilator => ({
+                season_id: currentSeason.id,
+                invigilator_id: invigilator.id,
+                notification_type: 'shifts_available',
+                title: 'New shifts are available',
+                message:
+                  'New shifts have been published. Visit Available Shifts to take a look.',
+              }))
+            );
+
+          if (notificationError) {
+            setStatus(
+              `Shifts published, but notifications could not be created: ${notificationError.message}`
+            );
+            return;
+          }
+        }
+      }
 
       setLastPublishedAt(publishTime);
       setStatus('All shifts published.');
@@ -570,40 +896,21 @@ export default function ShiftSetupPage() {
     }
   }
 
-async function uploadRoomRequirements(
-  event: React.ChangeEvent<HTMLInputElement>
+async function saveRoomRequirementRows(
+  headers: string[],
+  parsedRows: string[][],
+  acceptedExtraStarts: Set<string>
 ) {
   if (!currentSeason?.id) return;
+  const get = (row: string[], name: string) => {
+    const index = headers.indexOf(name);
+    return index >= 0 ? row[index]?.replace(/"/g, '') ?? '' : '';
+  };
 
-  const file = event.target.files?.[0];
-  if (!file) return;
+  setUploadingRooms(true);
+  setStatus('Uploading room requirements...');
 
   try {
-    setUploadingRooms(true);
-    setStatus('Uploading room requirements...');
-
-    const text = await file.text();
-
-    const rows = text
-  .replace(/^\uFEFF/, '')
-  .split(/\r?\n/)
-  .map(r => r.trim())
-  .filter(Boolean);
-
-    if (rows.length < 2) {
-      setStatus('CSV is empty.');
-      return;
-    }
-
-    const headers = rows[0].split(',').map(header => header.replace(/"/g, '').trim());
-
-    const dataRows = rows.slice(1);
-
-    const get = (row: string[], name: string) => {
-      const index = headers.indexOf(name);
-      return index >= 0 ? row[index]?.replace(/"/g, '') ?? '' : '';
-    };
-
     await supabase
       .from('room_requirements')
       .delete()
@@ -611,12 +918,9 @@ async function uploadRoomRequirements(
 
     const inserts = [];
 
-    for (const rowText of dataRows) {
-      const row = rowText.split(',').map(cell => cell.replace(/"/g, '').trim());
+    for (const row of parsedRows) {
 
       const rawDate = get(row, 'Date');
-console.log('Room CSV row:', row);
-console.log('Raw date:', rawDate);
 
       const cleanDate = rawDate.split(' ')[0];
 
@@ -628,33 +932,31 @@ console.log('Raw date:', rawDate);
 
       const start = get(row, 'Start');
 
-      let sessionKey: SessionKey = 'morning';
-
-      const hour = parseInt(start.split(':')[0] || '0');
-
-      if (hour >= 13) {
-        sessionKey = 'afternoon';
-      } else if (hour >= 11) {
-        sessionKey = 'mid';
-      }
+      const sessionKey = acceptedExtraStarts.has(start)
+        ? extraSessionKey(start)
+        : sessionFromStartTime(start);
 
       const studentCount = Number(get(row, 'NoOfCands') || '0');
 
-      const suggestedInvigilators =
-        studentCount <= 1
-          ? 1
-          : Math.ceil(studentCount / 30) + 1;
+      const roomName = get(row, 'Room').trim();
+      const rulesForRoom = roomStaffingRules[roomName] ?? staffingRules;
+      const suggestedInvigilators = calculateInvigilatorsNeeded(
+        studentCount,
+        rulesForRoom
+      );
 
       inserts.push({
         season_id: currentSeason.id,
         exam_date: examDate,
         session_key: sessionKey,
         start_time: start,
-        room_name: get(row, 'Room'),
+        room_name: roomName,
         exam_name: get(row, 'ComponentLocalName'),
         paper_code: get(row, 'ComponentCode'),
         student_count: studentCount,
-        duration_minutes: Number(get(row, 'Length') || get(row, 'Length1') || '0'),
+        duration_minutes: parseDurationMinutes(
+          get(row, 'Length') || get(row, 'Length1') || '0'
+        ),
         suggested_invigilators: suggestedInvigilators,
       });
     }
@@ -668,6 +970,8 @@ console.log('Raw date:', rawDate);
       return;
     }
 
+    await loadRoomStaffingRules();
+    setPendingRoomUpload(null);
     setStatus(`Uploaded ${inserts.length} room requirements.`);
   } catch (error) {
     setStatus(
@@ -675,6 +979,56 @@ console.log('Raw date:', rawDate);
     );
   } finally {
     setUploadingRooms(false);
+  }
+}
+
+async function uploadRoomRequirements(
+  event: React.ChangeEvent<HTMLInputElement>
+) {
+  const file = event.target.files?.[0];
+  event.target.value = '';
+  if (!file) return;
+
+  try {
+    const text = await file.text();
+    const rows = text
+      .replace(/^\uFEFF/, '')
+      .split(/\r?\n/)
+      .map(row => row.trim())
+      .filter(Boolean);
+
+    if (rows.length < 2) {
+      setStatus('CSV is empty.');
+      return;
+    }
+
+    const headers = rows[0]
+      .split(',')
+      .map(header => header.replace(/"/g, '').trim());
+    const parsedRows = rows.slice(1).map(rowText =>
+      rowText.split(',').map(cell => cell.replace(/"/g, '').trim())
+    );
+    const startIndex = headers.indexOf('Start');
+    const alternativeStarts = Array.from(
+      new Set(
+        parsedRows
+          .map(row => (startIndex >= 0 ? row[startIndex] ?? '' : ''))
+          .filter(start => {
+            const minutes = timeToMinutes(start);
+            return minutes >= 9 * 60 + 30 && minutes < 11 * 60;
+          })
+      )
+    ).sort();
+
+    if (alternativeStarts.length > 0) {
+      setPendingRoomUpload({ headers, rows: parsedRows, alternativeStarts });
+      setStatus('Alternative start time found. Choose how to handle it below.');
+      return;
+    }
+
+    await saveRoomRequirementRows(headers, parsedRows, new Set());
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : 'Upload failed');
   }
 }
 
@@ -699,56 +1053,149 @@ async function calculateRoomRequirements() {
       return;
     }
 
-    const roomGroups = new Map<string, number>();
+    const rowsBySession = new Map<string, typeof rooms>();
+    const importedDates = new Set<string>();
 
     for (const room of rooms) {
-      const key = [
+      const correctedSessionKey = String(room.session_key).startsWith('extra_')
+        ? room.session_key
+        : sessionFromStartTime(room.start_time);
+      importedDates.add(room.exam_date);
+
+      if (room.session_key !== correctedSessionKey) {
+        const { error: correctionError } = await supabase
+          .from('room_requirements')
+          .update({ session_key: correctedSessionKey })
+          .eq('id', room.id);
+
+        if (correctionError) throw new Error(correctionError.message);
+      }
+
+      const sessionKeyName = JSON.stringify([
         room.exam_date,
-        room.session_key,
-        room.start_time,
-        room.room_name,
-      ].join('__');
-
-      const current = roomGroups.get(key) ?? 0;
-
-      roomGroups.set(
-        key,
-        current + (room.student_count ?? 0)
-      );
+        correctedSessionKey,
+      ]);
+      const currentRows = rowsBySession.get(sessionKeyName) ?? [];
+      currentRows.push(room);
+      rowsBySession.set(sessionKeyName, currentRows);
     }
 
     const sessionTotals = new Map<string, number>();
 
-    for (const [roomKey, studentTotal] of Array.from(roomGroups.entries())) {
-      const [examDate, sessionKey] = roomKey.split('__');
+    for (const [sessionKeyName, sessionRows] of Array.from(
+      rowsBySession.entries()
+    )) {
+      const toMinutes = (time: string) => {
+        const [hours, minutes] = (time || '00:00')
+          .split(':')
+          .map(Number);
+        return hours * 60 + minutes;
+      };
 
-      const invigilatorsNeeded =
-        studentTotal <= 1
-          ? 1
-          : Math.ceil(studentTotal / 30) + 1;
-
-      const sessionKeyName = `${examDate}_${sessionKey}`;
-
-      const current =
-        sessionTotals.get(sessionKeyName) ?? 0;
-
-      sessionTotals.set(
-        sessionKeyName,
-        current + invigilatorsNeeded
+      const startTimes = Array.from(
+        new Set(sessionRows.map(room => toMinutes(room.start_time)))
       );
+      let peakNeeded = 0;
+
+      for (const checkpoint of startTimes) {
+        const cohortsByRoom = new Map<string, Map<string, number>>();
+
+        for (const room of sessionRows) {
+          const start = toMinutes(room.start_time);
+          const duration = Math.max(Number(room.duration_minutes) || 0, 1);
+          const end = start + duration;
+
+          if (start <= checkpoint && end > checkpoint) {
+            const roomName = String(room.room_name ?? '').trim();
+            const paperCode = String(room.paper_code ?? '').trim();
+            const examName = String(room.exam_name ?? '').trim();
+            const cohortKey =
+              paperCode.replace(/[\d\W_]+$/g, '').toLowerCase() ||
+              examName.replace(/\b(?:paper|p)\s*\d+.*$/i, '').toLowerCase() ||
+              `${paperCode}_${examName}`.toLowerCase();
+            const roomCohorts = cohortsByRoom.get(roomName) ?? new Map();
+
+            roomCohorts.set(
+              cohortKey,
+              Math.max(
+                roomCohorts.get(cohortKey) ?? 0,
+                Number(room.student_count) || 0
+              )
+            );
+            cohortsByRoom.set(roomName, roomCohorts);
+          }
+        }
+
+        let checkpointNeeded = 0;
+
+        for (const [roomName, roomCohorts] of Array.from(
+          cohortsByRoom.entries()
+        )) {
+          const studentTotal = Array.from(roomCohorts.values()).reduce(
+            (sum, count) => sum + count,
+            0
+          );
+          const rulesForRoom = roomStaffingRules[roomName] ?? staffingRules;
+          checkpointNeeded += calculateInvigilatorsNeeded(
+            studentTotal,
+            rulesForRoom
+          );
+        }
+
+        peakNeeded = Math.max(peakNeeded, checkpointNeeded);
+      }
+
+      sessionTotals.set(sessionKeyName, peakNeeded);
     }
 
-    for (const [key, total] of Array.from(sessionTotals.entries())) {
-      const [examDate, sessionKey] = key.split('_');
-
+    for (const examDate of Array.from(importedDates)) {
       const day = days.find(d => d.date === examDate);
-
       if (!day) continue;
 
-      await updateSession(day.id, sessionKey as SessionKey, {
-        enabled: true,
-        needed: total,
-      });
+      for (const sessionKey of ['morning', 'mid', 'afternoon'] as SessionKey[]) {
+        const total =
+          sessionTotals.get(JSON.stringify([examDate, sessionKey])) ?? 0;
+
+        await updateSession(day.id, sessionKey, {
+          enabled: total > 0,
+          needed: total,
+        });
+      }
+
+      const extraEntries = Array.from(sessionTotals.entries()).filter(
+        ([key]) => {
+          const [entryDate, entrySession] = JSON.parse(key) as string[];
+          return entryDate === examDate && entrySession.startsWith('extra_');
+        }
+      );
+
+      for (const [key, total] of extraEntries) {
+        const [, sessionKey] = JSON.parse(key) as string[];
+        const sessionRows = rowsBySession.get(key) ?? [];
+        const startTime = String(sessionRows[0]?.start_time ?? '').slice(0, 5);
+        const endMinutes = Math.max(
+          ...sessionRows.map(room =>
+            timeToMinutes(room.start_time) +
+            Math.ceil(Math.max(Number(room.duration_minutes) || 0, 60) * 1.25)
+          )
+        );
+        const endTime = minutesToTime(endMinutes);
+
+        const { error: extraError } = await supabase.from('shift_slots').upsert(
+          {
+            exam_day_id: day.id,
+            session_key: sessionKey,
+            needed: total,
+            published: false,
+            start_time: startTime,
+            end_time: endTime,
+            display_label: `Extra session – ${startTime}`,
+          },
+          { onConflict: 'exam_day_id,session_key' }
+        );
+
+        if (extraError) throw new Error(extraError.message);
+      }
     }
 
     await loadDays();
@@ -832,6 +1279,64 @@ async function calculateRoomRequirements() {
     disabled={uploadingRooms}
   />
 
+  {pendingRoomUpload && (
+    <div
+      style={{
+        marginTop: 16,
+        padding: 16,
+        borderRadius: 12,
+        border: '2px solid #c4b5fd',
+        background: '#f5f3ff',
+      }}
+    >
+      <strong style={{ color: '#4c1d95' }}>
+        Alternative start {pendingRoomUpload.alternativeStarts.length === 1 ? 'time' : 'times'} found
+      </strong>
+      <p style={{ margin: '8px 0 12px', color: '#374151' }}>
+        The timetable includes {pendingRoomUpload.alternativeStarts.join(', ')}.
+        Would you like to create {pendingRoomUpload.alternativeStarts.length === 1 ? 'an additional session' : 'additional sessions'}?
+      </p>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <button
+          onClick={() =>
+            saveRoomRequirementRows(
+              pendingRoomUpload.headers,
+              pendingRoomUpload.rows,
+              new Set(pendingRoomUpload.alternativeStarts)
+            )
+          }
+          style={primaryButton}
+          disabled={uploadingRooms}
+        >
+          Yes, create extra {pendingRoomUpload.alternativeStarts.length === 1 ? 'session' : 'sessions'}
+        </button>
+        <button
+          onClick={() =>
+            saveRoomRequirementRows(
+              pendingRoomUpload.headers,
+              pendingRoomUpload.rows,
+              new Set()
+            )
+          }
+          style={secondaryButton}
+          disabled={uploadingRooms}
+        >
+          No, keep standard sessions
+        </button>
+        <button
+          onClick={() => {
+            setPendingRoomUpload(null);
+            setStatus('Upload cancelled.');
+          }}
+          style={secondaryButton}
+          disabled={uploadingRooms}
+        >
+          Cancel upload
+        </button>
+      </div>
+    </div>
+  )}
+
 <div style={{ marginTop: 14 }}>
   <button
     onClick={calculateRoomRequirements}
@@ -842,6 +1347,299 @@ async function calculateRoomRequirements() {
   </button>
 </div>
 
+</section>
+
+<section
+  style={{
+    background: 'white',
+    border: '1px solid #e5e7eb',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 20,
+    boxShadow: '0 4px 14px rgba(0,0,0,0.06)',
+  }}
+>
+  <h2 style={{ marginTop: 0, marginBottom: 8, color: '#4c1d95' }}>
+    Staffing rules
+  </h2>
+  <p style={{ marginTop: 0, color: '#6b7280' }}>
+    These rules are saved for this season and used when room requirements are
+    uploaded or recalculated.
+  </p>
+
+  <div
+    style={{
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+      gap: 14,
+      marginBottom: 16,
+    }}
+  >
+    <label style={{ display: 'grid', gap: 6 }}>
+      <strong>Candidates per invigilator</strong>
+      <input
+        type="number"
+        min={1}
+        step={1}
+        value={staffingRules.candidatesPerInvigilator}
+        onChange={event =>
+          updateStaffingRule('candidatesPerInvigilator', event.target.value)
+        }
+        style={input}
+      />
+    </label>
+
+    <label style={{ display: 'grid', gap: 6 }}>
+      <strong>Additional invigilators per room</strong>
+      <input
+        type="number"
+        min={0}
+        step={1}
+        value={staffingRules.additionalInvigilatorsPerRoom}
+        onChange={event =>
+          updateStaffingRule(
+            'additionalInvigilatorsPerRoom',
+            event.target.value
+          )
+        }
+        style={input}
+      />
+    </label>
+
+    <label style={{ display: 'grid', gap: 6 }}>
+      <strong>Minimum invigilators per room</strong>
+      <input
+        type="number"
+        min={1}
+        step={1}
+        value={staffingRules.minimumInvigilatorsPerRoom}
+        onChange={event =>
+          updateStaffingRule(
+            'minimumInvigilatorsPerRoom',
+            event.target.value
+          )
+        }
+        style={input}
+      />
+    </label>
+
+    <label
+      style={{
+        display: 'flex',
+        gap: 8,
+        alignItems: 'center',
+        alignSelf: 'end',
+        padding: '10px 0',
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={staffingRules.singleCandidateNeedsOne}
+        onChange={event =>
+          setStaffingRules(current => ({
+            ...current,
+            singleCandidateNeedsOne: event.target.checked,
+          }))
+        }
+      />
+      <strong>If there is only 1 student, use 1 invigilator</strong>
+    </label>
+  </div>
+
+  <p style={{ color: '#4b5563', marginTop: 0 }}>
+    Example: a room with 61 candidates needs{' '}
+    <strong>{calculateInvigilatorsNeeded(61, staffingRules)}</strong>{' '}
+    invigilators with the current rules.
+  </p>
+
+  <button
+    onClick={saveStaffingRules}
+    style={primaryButton}
+    disabled={savingRules}
+  >
+    {savingRules ? 'Saving...' : 'Save staffing rules'}
+  </button>
+</section>
+
+<section
+  style={{
+    background: 'white',
+    border: '1px solid #e5e7eb',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 20,
+    boxShadow: '0 4px 14px rgba(0,0,0,0.06)',
+  }}
+>
+  <h2 style={{ marginTop: 0, marginBottom: 8, color: '#4c1d95' }}>
+    Rules by room
+  </h2>
+  <p style={{ marginTop: 0, color: '#6b7280' }}>
+    Rooms found in the uploaded CSV appear here. Turn on an override only where
+    a room needs different staffing from the season defaults.
+  </p>
+
+  {identifiedRooms.length === 0 ? (
+    <div
+      style={{
+        background: '#f9fafb',
+        border: '1px dashed #d1d5db',
+        borderRadius: 12,
+        padding: 16,
+        color: '#6b7280',
+      }}
+    >
+      Upload a room requirements CSV to identify rooms.
+    </div>
+  ) : (
+    <>
+      <div style={{ display: 'grid', gap: 12 }}>
+        {identifiedRooms.map(roomName => {
+          const override = roomStaffingRules[roomName];
+          const displayedRules = override ?? staffingRules;
+
+          return (
+            <div
+              key={roomName}
+              style={{
+                border: '1px solid #e5e7eb',
+                borderRadius: 12,
+                padding: 14,
+                background: override ? '#faf5ff' : '#f9fafb',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: 12,
+                  flexWrap: 'wrap',
+                }}
+              >
+                <strong style={{ color: '#4c1d95', fontSize: 17 }}>
+                  {roomName}
+                </strong>
+                <label style={checkboxLabel}>
+                  <input
+                    type="checkbox"
+                    checked={override !== null && override !== undefined}
+                    onChange={event =>
+                      setRoomOverride(roomName, event.target.checked)
+                    }
+                  />
+                  Use custom rules
+                </label>
+              </div>
+
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns:
+                    'repeat(auto-fit, minmax(190px, 1fr))',
+                  gap: 10,
+                  marginTop: 12,
+                }}
+              >
+                <label style={{ display: 'grid', gap: 5 }}>
+                  <span>Candidates per invigilator</span>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    disabled={!override}
+                    value={displayedRules.candidatesPerInvigilator}
+                    onChange={event =>
+                      updateRoomStaffingRule(
+                        roomName,
+                        'candidatesPerInvigilator',
+                        event.target.value
+                      )
+                    }
+                    style={input}
+                  />
+                </label>
+                <label style={{ display: 'grid', gap: 5 }}>
+                  <span>Additional per room</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    disabled={!override}
+                    value={displayedRules.additionalInvigilatorsPerRoom}
+                    onChange={event =>
+                      updateRoomStaffingRule(
+                        roomName,
+                        'additionalInvigilatorsPerRoom',
+                        event.target.value
+                      )
+                    }
+                    style={input}
+                  />
+                </label>
+                <label style={{ display: 'grid', gap: 5 }}>
+                  <span>Minimum per room</span>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    disabled={!override}
+                    value={displayedRules.minimumInvigilatorsPerRoom}
+                    onChange={event =>
+                      updateRoomStaffingRule(
+                        roomName,
+                        'minimumInvigilatorsPerRoom',
+                        event.target.value
+                      )
+                    }
+                    style={input}
+                  />
+                </label>
+                <label
+                  style={{
+                    display: 'flex',
+                    gap: 8,
+                    alignItems: 'center',
+                    alignSelf: 'end',
+                    padding: '10px 0',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    disabled={!override}
+                    checked={displayedRules.singleCandidateNeedsOne}
+                    onChange={event =>
+                      setRoomStaffingRules(current => ({
+                        ...current,
+                        [roomName]: {
+                          ...(current[roomName] ?? staffingRules),
+                          singleCandidateNeedsOne: event.target.checked,
+                        },
+                      }))
+                    }
+                  />
+                  <span>1 student needs only 1 invigilator</span>
+                </label>
+              </div>
+              {!override && (
+                <div style={{ color: '#6b7280', marginTop: 8, fontSize: 13 }}>
+                  Using season defaults
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <button
+        onClick={saveRoomStaffingRules}
+        style={{ ...primaryButton, marginTop: 16 }}
+        disabled={savingRoomRules}
+      >
+        {savingRoomRules ? 'Saving...' : 'Save room rules'}
+      </button>
+    </>
+  )}
 </section>
 
 <div style={infoGrid}>
@@ -861,9 +1659,31 @@ async function calculateRoomRequirements() {
           Publish all shifts
         </button>
 
+        <button
+          onClick={openPrivateAssignments}
+          style={secondaryButton}
+        >
+          Assign shifts privately
+        </button>
+
         <span style={statusStyle(status)}>
           {loading ? 'Loading...' : status}
         </span>
+      </div>
+
+      <div
+        style={{
+          marginBottom: 20,
+          padding: 14,
+          background: '#f5f3ff',
+          border: '1px solid #ddd6fe',
+          borderRadius: 12,
+          color: '#4c1d95',
+          lineHeight: 1.5,
+        }}
+      >
+        You can assign saved shifts before publishing them. Invigilators cannot
+        see or apply for a shift until you choose <strong>Publish all shifts</strong>.
       </div>
 
       <div style={setupGrid}>
@@ -999,6 +1819,51 @@ async function calculateRoomRequirements() {
                   );
                 })}
               </div>
+
+              {extraShiftSlots.some(slot => slot.examDayId === day.id) && (
+                <div style={{ marginTop: 14, display: 'grid', gap: 10 }}>
+                  <strong style={{ color: '#4c1d95' }}>Additional sessions</strong>
+                  {extraShiftSlots
+                    .filter(slot => slot.examDayId === day.id)
+                    .sort((a, b) => a.startTime.localeCompare(b.startTime))
+                    .map(slot => (
+                      <div
+                        key={slot.id}
+                        style={{
+                          ...sessionCard,
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          gap: 12,
+                          flexWrap: 'wrap',
+                        }}
+                      >
+                        <div>
+                          <strong>{slot.label}</strong>
+                          <div style={{ color: '#6b7280', marginTop: 4 }}>
+                            {slot.startTime}–{slot.endTime}
+                          </div>
+                        </div>
+                        <label style={neededLine}>
+                          <span>Needed</span>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={slot.needed === 0 ? '' : String(slot.needed)}
+                            onChange={event =>
+                              changeExtraNeeded(slot.id, event.target.value)
+                            }
+                            onBlur={() => saveExtraNeeded(slot.id)}
+                            onKeyDown={event => {
+                              if (event.key === 'Enter') event.currentTarget.blur();
+                            }}
+                            style={numberInput}
+                          />
+                        </label>
+                      </div>
+                    ))}
+                </div>
+              )}
             </div>
           ))
         )}
