@@ -4,11 +4,43 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { supabase } from '../../lib/supabase';
 
+type Notice = {
+  id: string;
+  title: string;
+  content: string;
+  position: number;
+};
+
+const defaultNotices: Notice[] = [
+  {
+    id: 'mock-exams',
+    title: 'Mock Exams: Last Updated 6/5/26',
+    content:
+      'During the Y10 mock exam seasons there will be 2 sessions in a day. The exams will begin at 8:45am and 1:00pm. Please arrive 30 minutes before these start times.',
+    position: 1,
+  },
+  {
+    id: 'summer-exams',
+    title: 'Summer Exams: Last Updated 6/5/26',
+    content:
+      'During the summer exam season there will be 2 sessions in a day. The exams will begin at 9:00am and 1:00pm. Please arrive 30 minutes before these start times.',
+    position: 2,
+  },
+  {
+    id: 'general-information',
+    title: 'General Information',
+    content: 'Please check this area for important updates from the exams team.',
+    position: 3,
+  },
+];
+
 export default function InvigilatorHomePage() {
   const [name, setName] = useState('');
+  const [notices, setNotices] = useState<Notice[]>(defaultNotices);
 
   useEffect(() => {
     loadInvigilator();
+    loadNotices();
   }, []);
 
   async function loadInvigilator() {
@@ -27,6 +59,17 @@ export default function InvigilatorHomePage() {
     }
   }
 
+  async function loadNotices() {
+    const { data, error } = await supabase
+      .from('invigilator_notices')
+      .select('id, title, content, position')
+      .order('position', { ascending: true });
+
+    if (!error && data?.length) {
+      setNotices(data as Notice[]);
+    }
+  }
+
   return (
     <div style={page}>
       <div style={header}>
@@ -36,6 +79,15 @@ export default function InvigilatorHomePage() {
           below to manage your shifts and view your schedule.
         </p>
       </div>
+
+      <section aria-label="Important information" style={infoGrid}>
+        {notices.map(notice => (
+          <div key={notice.id} style={infoCard}>
+            <h2 style={sectionTitle}>{notice.title}</h2>
+            <p style={sectionText}>{notice.content}</p>
+          </div>
+        ))}
+      </section>
 
       <div style={cardGrid}>
         <DashboardCard
@@ -74,25 +126,6 @@ export default function InvigilatorHomePage() {
         />
       </div>
 
-      <div style={infoGrid}>
-        <div style={infoCard}>
-          <h2 style={sectionTitle}>Mock Exams: Last Updated 6/5/26</h2>
-          <p style={sectionText}>
-            During the Y10 mock exam seasons there will be 2 sessions in a day. The
-            exams will begin at 8:45am and 1:00pm. Please arrive 30
-            minutes before these start times.
-          </p>
-        </div>
-
-        <div style={infoCard}>
-          <h2 style={sectionTitle}>Summer Exams: Last Updated 6/5/26</h2>
-          <p style={sectionText}>
-            During the summer exam season there will be 2 sessions in a day.
-            The exams will begin at 9:00am and 1:00pm. Please arrive 30 minutes
-            before these start times.
-          </p>
-        </div>
-      </div>
     </div>
   );
 }
@@ -187,6 +220,7 @@ const infoGrid: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
   gap: 20,
+  marginBottom: 28,
 };
 
 const infoCard: React.CSSProperties = {

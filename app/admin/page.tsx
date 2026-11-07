@@ -57,6 +57,13 @@ export default function AdminHomePage() {
         />
 
         <DashboardCard
+          href="/admin/invigilator-information"
+          icon="ℹ️"
+          title="Invigilator Information"
+          text="Edit the information boxes shown on the invigilator dashboard."
+        />
+
+        <DashboardCard
           href="/admin/invigilators"
           icon="👥"
           title="Manage Invigilators"

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
+import { daysUntil, isTodayOrFuture } from '../../../lib/dateHelpers';
 
 type SessionKey = 'morning' | 'mid' | 'afternoon';
 
@@ -22,32 +23,6 @@ type ShiftGroup = {
 function formatSession(session: SessionKey) {
   if (session === 'mid') return 'Mid';
   return session.charAt(0).toUpperCase() + session.slice(1);
-}
-
-function parseLocalDate(dateStr: string) {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  return new Date(y, m - 1, d);
-}
-
-function isTodayOrFuture(dateStr: string) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  const shiftDate = parseLocalDate(dateStr);
-  shiftDate.setHours(0, 0, 0, 0);
-
-  return shiftDate >= today;
-}
-
-function daysUntil(dateStr: string) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  const target = parseLocalDate(dateStr);
-  target.setHours(0, 0, 0, 0);
-
-  const diff = target.getTime() - today.getTime();
-  return Math.ceil(diff / (1000 * 60 * 60 * 24));
 }
 
 const sessionOrder: Record<SessionKey, number> = {
@@ -368,7 +343,7 @@ export default function MyShiftsPage() {
                       >
                         <div style={{ marginBottom: 8 }}>
                           <strong>Session:</strong>{' '}
-                          {formatSession(shift.session)} ({time.start}–
+                          {formatSession(shift.session)} ({time.start}-
                           {time.end})
                         </div>
 

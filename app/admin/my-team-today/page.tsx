@@ -3,6 +3,12 @@
 import { useContext, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { SeasonContext } from '../SeasonContext';
+import {
+  buildCalendarDays,
+  formatLongDate,
+  monthName,
+  toYMD,
+} from '../../../lib/dateHelpers';
 
 type SessionKey = 'morning' | 'mid' | 'afternoon';
 
@@ -30,34 +36,6 @@ type CalendarGap = {
   spaces_left: number;
 };
 
-function toYMD(date: Date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
-
-function parseDate(dateStr: string) {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  return new Date(y, m - 1, d);
-}
-
-function monthName(date: Date) {
-  return date.toLocaleDateString('en-GB', {
-    month: 'long',
-    year: 'numeric',
-  });
-}
-
-function formatLongDate(dateStr: string) {
-  return parseDate(dateStr).toLocaleDateString('en-GB', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  });
-}
-
 function sessionLabel(session: SessionKey) {
   if (session === 'mid') return 'Mid';
   return session.charAt(0).toUpperCase() + session.slice(1);
@@ -68,34 +46,6 @@ const sessionOrder: Record<SessionKey, number> = {
   mid: 2,
   afternoon: 3,
 };
-
-function buildCalendarDays(viewDate: Date) {
-  const year = viewDate.getFullYear();
-  const month = viewDate.getMonth();
-
-  const firstOfMonth = new Date(year, month, 1);
-  const startDay = (firstOfMonth.getDay() + 6) % 7;
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-
-  const cells: Array<{ date: Date | null; key: string }> = [];
-
-  for (let i = 0; i < startDay; i++) {
-    cells.push({ date: null, key: `blank-start-${i}` });
-  }
-
-  for (let day = 1; day <= daysInMonth; day++) {
-    cells.push({
-      date: new Date(year, month, day),
-      key: `day-${year}-${month + 1}-${day}`,
-    });
-  }
-
-  while (cells.length % 7 !== 0) {
-    cells.push({ date: null, key: `blank-end-${cells.length}` });
-  }
-
-  return cells;
-}
 
 export default function AdminMyTeamTodayPage() {
   const { currentSeason } = useContext(SeasonContext);
@@ -319,7 +269,7 @@ if (invigilator?.full_name) {
         <div style={calendarCard}>
           <div style={calendarHeader}>
             <button onClick={goPrevMonth} style={navButton}>
-              ←
+              Prev
             </button>
 
             <h2 style={{ margin: 0, fontSize: 18, color: '#4c1d95' }}>
@@ -327,7 +277,7 @@ if (invigilator?.full_name) {
             </h2>
 
             <button onClick={goNextMonth} style={navButton}>
-              →
+              Next
             </button>
           </div>
 
@@ -409,7 +359,7 @@ if (invigilator?.full_name) {
         ) : slots.length === 0 ? (
           <p style={muted}>No shifts have been set up for this date.</p>
         ) : gaps.length === 0 ? (
-          <p style={muted}>No gaps — all sessions are fully staffed.</p>
+          <p style={muted}>No gaps - all sessions are fully staffed.</p>
         ) : (
           <div style={{ display: 'grid', gap: 10 }}>
             {gaps.map(slot => (

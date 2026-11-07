@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
+import { isTodayOrFuture } from '../../../lib/dateHelpers';
 
 type SessionKey = 'morning' | 'mid' | 'afternoon';
 
@@ -37,9 +38,6 @@ export default function AvailableShiftsPage() {
   const [shifts, setShifts] = useState<AvailableShift[]>([]);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState('');
-
-  const today = new Date(); 
-  today.setHours(0,0,0,0);
 
   useEffect(() => {
     loadShifts();
@@ -120,6 +118,24 @@ export default function AvailableShiftsPage() {
       (applicationRows ?? []).map(row => row.shift_slot_id)
     );
 
+    const { data: invigilatorAssignmentRows, error: invigilatorAssignmentError } =
+      await supabase
+        .from('shift_assignments')
+        .select('shift_slot_id')
+        .eq('invigilator_id', invigilatorId);
+
+    if (invigilatorAssignmentError) {
+      setStatus(
+        `Could not load existing assignments: ${invigilatorAssignmentError.message}`
+      );
+      setLoading(false);
+      return;
+    }
+
+    const assignedShiftIdsForThisInvigilator = new Set(
+      (invigilatorAssignmentRows ?? []).map(row => row.shift_slot_id)
+    );
+
     const { data: assignmentRows, error: assignmentError } = await supabase
       .from('shift_assignments')
       .select('shift_slot_id, invigilator_id')
@@ -138,12 +154,6 @@ export default function AvailableShiftsPage() {
       assignedCountByShift[row.shift_slot_id] =
         (assignedCountByShift[row.shift_slot_id] ?? 0) + 1;
     });
-
-    const assignedShiftIdsForThisInvigilator = new Set(
-      (assignmentRows ?? [])
-        .filter(row => row.invigilator_id === invigilatorId)
-        .map(row => row.shift_slot_id)
-    );
 
     const mappedShifts: AvailableShift[] = (slots as any[])
       .map(slot => {
@@ -165,7 +175,11 @@ export default function AvailableShiftsPage() {
         const alreadyAssignedToThisPerson =
           assignedShiftIdsForThisInvigilator.has(shift.shiftSlotId);
 
-        return !isFull && !alreadyAssignedToThisPerson;
+        return (
+          isTodayOrFuture(shift.date) &&
+          !isFull &&
+          !alreadyAssignedToThisPerson
+        );
       })
       .sort((a, b) => {
         if (a.date !== b.date) return a.date.localeCompare(b.date);
@@ -329,13 +343,7 @@ export default function AvailableShiftsPage() {
               </div>
 
               <div style={{ display: 'grid', gap: 16 }}>
-                {group.shifts.filter(shift => {
-                const shiftDate = new Date(shift.date);
-                shiftDate.setHours(0, 0, 0, 0);
-
-                return shiftDate>= today; // only future or today
-               })
-               .map(shift=> (
+                {group.shifts.map(shift => (
                   <div
                     key={shift.shiftSlotId}
                     style={{

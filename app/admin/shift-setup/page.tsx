@@ -3,6 +3,7 @@
 import { useContext, useEffect, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { SeasonContext } from '../SeasonContext';
+import { formatLongDate, parseLocalDate, toYMD } from '../../../lib/dateHelpers';
 
 type SessionKey = 'morning' | 'mid' | 'afternoon';
 
@@ -18,24 +19,8 @@ type ExamDay = {
   sessions: Record<SessionKey, DaySession>;
 };
 
-function parseDate(dateStr: string) {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  return new Date(y, m - 1, d);
-}
-
-function toYMD(d: Date) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
-    d.getDate()
-  ).padStart(2, '0')}`;
-}
-
 function formatDateLabel(dateStr: string) {
-  return parseDate(dateStr).toLocaleDateString('en-GB', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  });
+  return formatLongDate(dateStr);
 }
 
 function formatDateTime(dateStr: string | null) {
@@ -56,8 +41,8 @@ function isWeekend(d: Date) {
 
 function getDatesInRange(from: string, to: string, skipWeekends: boolean) {
   const result: string[] = [];
-  const current = parseDate(from);
-  const end = parseDate(to);
+  const current = parseLocalDate(from);
+  const end = parseLocalDate(to);
 
   while (current <= end) {
     if (!skipWeekends || !isWeekend(current)) result.push(toYMD(current));
@@ -68,7 +53,7 @@ function getDatesInRange(from: string, to: string, skipWeekends: boolean) {
 }
 
 function getWeekFromDate(dateStr: string) {
-  const base = parseDate(dateStr);
+  const base = parseLocalDate(dateStr);
   const day = base.getDay();
   const diff = day === 0 ? -6 : 1 - day;
   base.setDate(base.getDate() + diff);
@@ -386,6 +371,36 @@ export default function ShiftSetupPage() {
         return;
       }
 
+      const { data: seasonSlots, error: slotsError } = await supabase
+        .from('shift_slots')
+        .select('id, needed, published')
+        .in('exam_day_id', seasonDayIds);
+
+      if (slotsError) {
+        setStatus(slotsError.message);
+        return;
+      }
+
+      const { data: previousAvailability, error: availabilityError } =
+        await supabase
+          .from('published_shift_availability')
+          .select('shift_slot_id, needed')
+          .eq('season_id', currentSeason.id);
+
+      if (availabilityError) {
+        setStatus(`Unable to check previous shift availability: ${availabilityError.message}`);
+        return;
+      }
+
+      const previousNeededBySlot = new Map(
+        (previousAvailability ?? []).map(row => [row.shift_slot_id, row.needed])
+      );
+      const slotsWithNewAvailability = (seasonSlots ?? []).filter(slot => {
+        const previousNeeded = previousNeededBySlot.get(slot.id);
+        return slot.published === false || previousNeeded === undefined || slot.needed > previousNeeded;
+      });
+      const hasNewAvailability = slotsWithNewAvailability.length > 0;
+
       const { error: publishError } = await supabase
         .from('shift_slots')
         .update({ published: true })
@@ -394,6 +409,84 @@ export default function ShiftSetupPage() {
       if (publishError) {
         setStatus(publishError.message);
         return;
+      }
+
+      const { error: clearAvailabilityError } = await supabase
+        .from('published_shift_availability')
+        .delete()
+        .eq('season_id', currentSeason.id);
+
+      if (clearAvailabilityError) {
+        setStatus(`Shifts published, but the availability snapshot could not be saved: ${clearAvailabilityError.message}`);
+        return;
+      }
+
+      if ((seasonSlots ?? []).length > 0) {
+        const { error: saveAvailabilityError } = await supabase
+          .from('published_shift_availability')
+          .insert(
+            seasonSlots.map(slot => ({
+              season_id: currentSeason.id,
+              shift_slot_id: slot.id,
+              needed: slot.needed,
+            }))
+          );
+
+        if (saveAvailabilityError) {
+          setStatus(`Shifts published, but the availability snapshot could not be saved: ${saveAvailabilityError.message}`);
+          return;
+        }
+      }
+
+      if (hasNewAvailability) {
+        const { data: existingAssignments, error: assignmentsError } =
+          await supabase
+            .from('shift_assignments')
+            .select('invigilator_id')
+            .in(
+              'shift_slot_id',
+              slotsWithNewAvailability.map(slot => slot.id)
+            );
+
+        if (assignmentsError) {
+          setStatus(`Shifts published, but notifications could not be created: ${assignmentsError.message}`);
+          return;
+        }
+
+        const alreadyAssignedIds = new Set(
+          (existingAssignments ?? []).map(assignment => assignment.invigilator_id)
+        );
+        const { data: invigilators, error: invigilatorsError } = await supabase
+          .from('invigilators')
+          .select('id')
+          .eq('active', true);
+
+        if (invigilatorsError) {
+          setStatus(`Shifts published, but notifications could not be created: ${invigilatorsError.message}`);
+          return;
+        }
+
+        const invigilatorsToNotify = (invigilators ?? []).filter(
+          invigilator => !alreadyAssignedIds.has(invigilator.id)
+        );
+
+        if (invigilatorsToNotify.length > 0) {
+          const { error: notificationError } = await supabase
+            .from('notifications')
+            .insert(
+              invigilatorsToNotify.map(invigilator => ({
+                invigilator_id: invigilator.id,
+                title: 'New shifts available',
+                message: 'New shifts are available to view and apply for.',
+                is_read: false,
+              }))
+            );
+
+          if (notificationError) {
+            setStatus(`Shifts published, but notifications could not be created: ${notificationError.message}`);
+            return;
+          }
+        }
       }
 
       const publishTime = new Date().toISOString();
@@ -456,8 +549,8 @@ export default function ShiftSetupPage() {
   async function addRange() {
     if (!fromDate || !toDate) return;
 
-    const start = parseDate(fromDate);
-    const end = parseDate(toDate);
+    const start = parseLocalDate(fromDate);
+    const end = parseLocalDate(toDate);
 
     if (start > end) return;
 

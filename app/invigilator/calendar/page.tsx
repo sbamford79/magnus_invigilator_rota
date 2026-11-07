@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
+import { buildCalendarDays, monthName, toYMD } from '../../../lib/dateHelpers';
 
 type ShiftItem = {
   id: string;
@@ -16,13 +17,6 @@ type ShiftGroup = {
   assigned: ShiftItem[];
 };
 
-function toYMD(date: Date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
-
 function formatSession(session: string) {
   if (session === 'mid') return 'Mid';
   return session.charAt(0).toUpperCase() + session.slice(1);
@@ -36,41 +30,6 @@ const sessionOrder: Record<string, number> = {
 
 function sortBySessionOrder(a: ShiftItem, b: ShiftItem) {
   return (sessionOrder[a.session] ?? 99) - (sessionOrder[b.session] ?? 99);
-}
-
-function monthName(date: Date) {
-  return date.toLocaleDateString('en-GB', {
-    month: 'long',
-    year: 'numeric',
-  });
-}
-
-function buildCalendarDays(viewDate: Date) {
-  const year = viewDate.getFullYear();
-  const month = viewDate.getMonth();
-
-  const firstOfMonth = new Date(year, month, 1);
-  const startDay = (firstOfMonth.getDay() + 6) % 7;
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-
-  const cells: Array<{ date: Date | null; key: string }> = [];
-
-  for (let i = 0; i < startDay; i++) {
-    cells.push({ date: null, key: `blank-start-${i}` });
-  }
-
-  for (let day = 1; day <= daysInMonth; day++) {
-    cells.push({
-      date: new Date(year, month, day),
-      key: `day-${year}-${month + 1}-${day}`,
-    });
-  }
-
-  while (cells.length % 7 !== 0) {
-    cells.push({ date: null, key: `blank-end-${cells.length}` });
-  }
-
-  return cells;
 }
 
 export default function InvigilatorCalendarPage() {
@@ -242,11 +201,11 @@ export default function InvigilatorCalendarPage() {
       <div style={calendarBox}>
         <div style={header}>
           <button onClick={goPrevMonth} style={navButtonStyle}>
-            ←
+            Prev
           </button>
           <h2 style={{ margin: 0, fontSize: 18 }}>{monthName(viewDate)}</h2>
           <button onClick={goNextMonth} style={navButtonStyle}>
-            →
+            Next
           </button>
         </div>
 
@@ -332,7 +291,7 @@ export default function InvigilatorCalendarPage() {
           ) : (
             assignedForSelected.map(s => (
               <div key={s.id} style={{ marginTop: 4 }}>
-                {s.label} – {formatSession(s.session)}
+                {s.label} - {formatSession(s.session)}
               </div>
             ))
           )}
@@ -347,7 +306,7 @@ export default function InvigilatorCalendarPage() {
           ) : (
             appliedForSelected.map(s => (
               <div key={s.id} style={{ marginTop: 4 }}>
-                {s.label} – {formatSession(s.session)}
+                {s.label} - {formatSession(s.session)}
               </div>
             ))
           )}

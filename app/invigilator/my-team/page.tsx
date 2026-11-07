@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
+import { toYMD } from '../../../lib/dateHelpers';
 
 type TeamShift = {
   shiftSlotId: string;
@@ -9,13 +10,6 @@ type TeamShift = {
   session: string;
   teamMembers: string[];
 };
-
-function toYMDLocal(date: Date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
 
 function formatSession(session: string) {
   if (session === 'mid') return 'Mid';
@@ -33,7 +27,7 @@ export default function MyTeamPage() {
   async function loadTeamToday() {
     setStatus('');
 
-    const today = toYMDLocal(new Date());
+    const today = toYMD(new Date());
 
     // 1. Get logged-in user
     const { data: authData, error: authError } = await supabase.auth.getUser();
