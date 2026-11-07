@@ -29,6 +29,8 @@ type Applicant = {
   name: string;
 };
 
+type PendingRemoval = { shiftId: string; invigilatorId: string; updatedSelection: string[] };
+
 const sessionOrder: Record<string, number> = {
   morning: 1,
   mid: 2,
@@ -70,6 +72,8 @@ export default function AssignInvigilatorsPage() {
   const [applicants, setApplicants] = useState<Record<string, Applicant[]>>({});
   const [selected, setSelected] = useState<Record<string, string[]>>({});
   const [assigned, setAssigned] = useState<Record<string, string[]>>({});
+  const [publishedAssignments, setPublishedAssignments] = useState<Record<string, string[]>>({});
+  const [pendingRemoval, setPendingRemoval] = useState<PendingRemoval | null>(null);
   const [manualPick, setManualPick] = useState<Record<string, string>>({});
   const [status, setStatus] = useState('');
   const [lastPublishedAt, setLastPublishedAt] = useState<string | null>(null);
@@ -198,7 +202,7 @@ export default function AssignInvigilatorsPage() {
 
     const { data: assignmentRows, error: assignmentsError } = await supabase
       .from('shift_assignments')
-      .select('shift_slot_id, invigilator_id')
+      .select('shift_slot_id, invigilator_id, published')
       .in('shift_slot_id', shiftSlotIds);
 
     if (assignmentsError) {
@@ -207,6 +211,7 @@ export default function AssignInvigilatorsPage() {
     }
 
     const assignedMap: Record<string, string[]> = {};
+    const publishedMap: Record<string, string[]> = {};
 
     (assignmentRows ?? []).forEach((row: any) => {
       if (!assignedMap[row.shift_slot_id]) {
@@ -214,15 +219,18 @@ export default function AssignInvigilatorsPage() {
       }
 
       assignedMap[row.shift_slot_id].push(row.invigilator_id);
+      if (row.published) (publishedMap[row.shift_slot_id] ??= []).push(row.invigilator_id);
     });
 
     setAssigned(assignedMap);
+    setPublishedAssignments(publishedMap);
     setSelected(assignedMap);
   }
 
   async function saveAssignmentsForShift(
     shiftId: string,
-    invigilatorIds: string[]
+    invigilatorIds: string[],
+    removeAvailabilityFor?: string
   ) {
     saveInProgressRef.current = true;
     setPendingSaves(count => count + 1);
@@ -261,6 +269,12 @@ export default function AssignInvigilatorsPage() {
           await loadData();
           return;
         }
+      }
+
+      if (removeAvailabilityFor) {
+        const { error } = await supabase.from('shift_applications').delete()
+          .eq('shift_slot_id', shiftId).eq('invigilator_id', removeAvailabilityFor);
+        if (error) { setStatus(error.message); return; }
       }
 
       if (invigilatorIdsToAdd.length > 0) {
@@ -362,6 +376,7 @@ export default function AssignInvigilatorsPage() {
         ...prev,
         [shiftId]: invigilatorIds,
       }));
+      setPublishedAssignments(prev => ({ ...prev, [shiftId]: [] }));
 
       setStatus('Assignments auto-saved');
     } finally {
@@ -396,12 +411,12 @@ export default function AssignInvigilatorsPage() {
       ? current.filter(id => id !== invigilatorId)
       : [...current, invigilatorId];
 
-    setSelected(prev => ({
-      ...prev,
-      [shiftId]: updated,
-    }));
+    if (exists && (publishedAssignments[shiftId] ?? []).includes(invigilatorId)) {
+      setPendingRemoval({ shiftId, invigilatorId, updatedSelection: updated });
+      return;
+    }
 
-    await saveAssignmentsForShift(shiftId, updated);
+    if (exists) await saveAssignmentsForShift(shiftId, updated);
   }
 
   async function addManualInvigilator(shiftId: string) {
@@ -464,12 +479,20 @@ export default function AssignInvigilatorsPage() {
     const current = selected[shiftId] ?? [];
     const updated = current.filter(id => id !== invigilatorId);
 
-    setSelected(prev => ({
-      ...prev,
-      [shiftId]: updated,
-    }));
-
+    if ((publishedAssignments[shiftId] ?? []).includes(invigilatorId)) {
+      setPendingRemoval({ shiftId, invigilatorId, updatedSelection: updated });
+      return;
+    }
+    setSelected(prev => ({ ...prev, [shiftId]: updated }));
     await saveAssignmentsForShift(shiftId, updated);
+  }
+
+  async function confirmRemoval(removeAvailability: boolean) {
+    if (!pendingRemoval) return;
+    const { shiftId, invigilatorId, updatedSelection } = pendingRemoval;
+    setPendingRemoval(null);
+    setSelected(prev => ({ ...prev, [shiftId]: updatedSelection }));
+    await saveAssignmentsForShift(shiftId, updatedSelection, removeAvailability ? invigilatorId : undefined);
   }
 
   async function publishAll() {
@@ -1023,6 +1046,20 @@ export default function AssignInvigilatorsPage() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {pendingRemoval && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.55)', display: 'grid', placeItems: 'center', padding: 20, zIndex: 50 }}>
+          <section style={{ maxWidth: 480, background: 'white', borderRadius: 16, padding: 24, boxShadow: '0 20px 50px rgba(0,0,0,.25)' }}>
+            <h2 style={{ marginTop: 0, color: '#4c1d95' }}>Remove {getInvigilatorName(pendingRemoval.invigilatorId)}?</h2>
+            <p>This assignment has already been published. Should they stay available for this shift?</p>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <button onClick={() => confirmRemoval(false)}>Keep available</button>
+              <button onClick={() => confirmRemoval(true)} style={{ background: '#dc2626', color: 'white', border: 'none', borderRadius: 8, padding: '8px 10px' }}>Remove availability</button>
+              <button onClick={() => setPendingRemoval(null)}>Cancel</button>
+            </div>
+          </section>
         </div>
       )}
     </div>
