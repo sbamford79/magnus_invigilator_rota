@@ -74,6 +74,7 @@ export default function AssignInvigilatorsPage() {
   const [status, setStatus] = useState('');
   const [lastPublishedAt, setLastPublishedAt] = useState<string | null>(null);
   const [pendingSaves, setPendingSaves] = useState(0);
+  const [sortMode, setSortMode] = useState<'unfilled' | 'date'>('unfilled');
   const saveInProgressRef = useRef(false);
 
   useEffect(() => {
@@ -594,6 +595,13 @@ export default function AssignInvigilatorsPage() {
   }
 
   const sortedShifts = [...shifts].sort((a, b) => {
+    if (sortMode === 'date') {
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      const timeCompare = (a.startTime ?? '').localeCompare(b.startTime ?? '');
+      if (timeCompare !== 0) return timeCompare;
+      return (sessionOrder[a.session] ?? 99) - (sessionOrder[b.session] ?? 99);
+    }
+
     const aAssigned = assigned[a.id]?.length ?? 0;
     const bAssigned = assigned[b.id]?.length ?? 0;
 
@@ -661,6 +669,59 @@ export default function AssignInvigilatorsPage() {
           flexWrap: 'wrap',
         }}
       >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontWeight: 700,
+          }}
+        >
+          <span>Sort shifts by</span>
+          <div
+            style={{
+              display: 'flex',
+              padding: 3,
+              borderRadius: 10,
+              border: '1px solid #c4b5fd',
+              background: 'white',
+            }}
+          >
+            <button
+              onClick={() => setSortMode('unfilled')}
+              aria-pressed={sortMode === 'unfilled'}
+              style={{
+                border: 'none',
+                borderRadius: 7,
+                padding: '7px 10px',
+                cursor: 'pointer',
+                font: 'inherit',
+                fontWeight: 700,
+                background: sortMode === 'unfilled' ? '#4c1d95' : 'transparent',
+                color: sortMode === 'unfilled' ? 'white' : '#4c1d95',
+              }}
+            >
+              Unfilled first
+            </button>
+            <button
+              onClick={() => setSortMode('date')}
+              aria-pressed={sortMode === 'date'}
+              style={{
+                border: 'none',
+                borderRadius: 7,
+                padding: '7px 10px',
+                cursor: 'pointer',
+                font: 'inherit',
+                fontWeight: 700,
+                background: sortMode === 'date' ? '#4c1d95' : 'transparent',
+                color: sortMode === 'date' ? 'white' : '#4c1d95',
+              }}
+            >
+              Date order
+            </button>
+          </div>
+        </div>
+
         <button
           onClick={publishAll}
           disabled={pendingSaves > 0}
