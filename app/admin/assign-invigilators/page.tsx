@@ -522,6 +522,22 @@ export default function AssignInvigilatorsPage() {
       return;
     }
 
+    if (!currentSeason?.id) return;
+    const { data: currentAssignments, error: currentError } = await supabase
+      .from('shift_assignments')
+      .select('shift_slot_id, invigilator_id')
+      .in('shift_slot_id', shiftSlotIds);
+    const { data: previousAssignments, error: previousError } = await supabase
+      .from('published_shift_assignments')
+      .select('shift_slot_id, invigilator_id')
+      .eq('season_id', currentSeason.id);
+    if (currentError || previousError) { setStatus(currentError?.message ?? previousError?.message ?? 'Could not compare published assignments'); return; }
+    const currentKeys = new Set((currentAssignments ?? []).map(row => `${row.shift_slot_id}:${row.invigilator_id}`));
+    const previousKeys = new Set((previousAssignments ?? []).map(row => `${row.shift_slot_id}:${row.invigilator_id}`));
+    const affectedInvigilatorIds = new Set<string>();
+    (currentAssignments ?? []).forEach(row => { if (!previousKeys.has(`${row.shift_slot_id}:${row.invigilator_id}`)) affectedInvigilatorIds.add(row.invigilator_id); });
+    (previousAssignments ?? []).forEach(row => { if (!currentKeys.has(`${row.shift_slot_id}:${row.invigilator_id}`)) affectedInvigilatorIds.add(row.invigilator_id); });
+
     const { error: publishError } = await supabase
       .from('shift_assignments')
       .update({ published: true })
@@ -542,13 +558,13 @@ export default function AssignInvigilatorsPage() {
 
       setLastPublishedAt(publishTime);
 
-      const newlyAssignedInvigilatorIds = Array.from(
-        new Set(
-          (unpublishedAssignments ?? []).map(
-            assignment => assignment.invigilator_id
-          )
-        )
-      );
+      await supabase.from('published_shift_assignments').delete().eq('season_id', currentSeason.id);
+      if ((currentAssignments ?? []).length > 0) {
+        await supabase.from('published_shift_assignments').insert(
+          currentAssignments!.map(row => ({ season_id: currentSeason.id, shift_slot_id: row.shift_slot_id, invigilator_id: row.invigilator_id }))
+        );
+      }
+      const newlyAssignedInvigilatorIds = Array.from(affectedInvigilatorIds);
 
       if (newlyAssignedInvigilatorIds.length > 0) {
         const { error: notificationError } = await supabase

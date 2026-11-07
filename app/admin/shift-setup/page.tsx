@@ -799,11 +799,22 @@ export default function ShiftSetupPage() {
           .select('id')
           .eq('active', true);
 
-        if ((activeInvigilators ?? []).length > 0) {
+        const { data: existingAssignments } = await supabase
+          .from('shift_assignments')
+          .select('invigilator_id')
+          .in('shift_slot_id', newlyPublishedSlots.map(slot => slot.id));
+        const alreadyAssigned = new Set(
+          (existingAssignments ?? []).map(row => row.invigilator_id)
+        );
+        const recipients = (activeInvigilators ?? []).filter(
+          invigilator => !alreadyAssigned.has(invigilator.id)
+        );
+
+        if (recipients.length > 0) {
           const { error: notificationError } = await supabase
             .from('invigilator_shift_notifications')
             .insert(
-              (activeInvigilators ?? []).map(invigilator => ({
+              recipients.map(invigilator => ({
                 season_id: currentSeason.id,
                 invigilator_id: invigilator.id,
                 notification_type: 'shifts_available',
