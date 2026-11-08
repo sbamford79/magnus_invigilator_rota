@@ -11,11 +11,21 @@ type Invigilator = {
   auth_user_id: string | null;
 };
 
+type AssignmentRule = {
+  rule_type: 'latest_finish' | 'earliest_start' | 'no_weekday' | 'max_daily' | 'max_weekly';
+  session_key: string;
+  latest_departure_time: string | null;
+  earliest_start_time: string | null;
+  weekday: number | null;
+  limit_value: number | null;
+};
+
 export default function ManageInvigilatorsPage() {
   const [invigilators, setInvigilators] = useState<Invigilator[]>([]);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [status, setStatus] = useState('');
+  const [rules, setRules] = useState<Record<string, AssignmentRule[]>>({});
 
   useEffect(() => {
     loadInvigilators();
@@ -33,6 +43,32 @@ export default function ManageInvigilatorsPage() {
     }
 
     setInvigilators((data ?? []) as Invigilator[]);
+    const { data: ruleRows } = await supabase
+      .from('invigilator_assignment_rules')
+      .select('invigilator_id, rule_type, session_key, latest_departure_time, earliest_start_time, weekday, limit_value')
+      .eq('active', true);
+    const grouped: Record<string, AssignmentRule[]> = {};
+    (ruleRows ?? []).forEach((row: any) => (grouped[row.invigilator_id] ??= []).push({ ...row, latest_departure_time: row.latest_departure_time?.slice(0, 5) ?? null, earliest_start_time: row.earliest_start_time?.slice(0, 5) ?? null }));
+    setRules(grouped);
+  }
+
+  function addRule(invigilatorId: string) { setRules(current => ({ ...current, [invigilatorId]: [...(current[invigilatorId] ?? []), { rule_type: 'latest_finish', session_key: 'morning', latest_departure_time: null, earliest_start_time: null, weekday: null, limit_value: null }] })); }
+  function updateRule(invigilatorId: string, index: number, change: Partial<AssignmentRule>) {
+    setRules(current => ({ ...current, [invigilatorId]: (current[invigilatorId] ?? []).map((rule, ruleIndex) => ruleIndex === index ? { ...rule, ...change } : rule) }));
+  }
+  function removeRule(invigilatorId: string, index: number) {
+    setRules(current => ({ ...current, [invigilatorId]: (current[invigilatorId] ?? []).filter((_, ruleIndex) => ruleIndex !== index) }));
+  }
+  async function saveRules(invigilatorId: string) {
+    const values = rules[invigilatorId] ?? [];
+    const { error: removeError } = await supabase.from('invigilator_assignment_rules').delete().eq('invigilator_id', invigilatorId);
+    if (removeError) { setStatus(removeError.message); return; }
+    if (values.length) {
+      const { error } = await supabase.from('invigilator_assignment_rules').insert(values.map(rule => ({ ...rule, invigilator_id: invigilatorId, room_name: '', active: true, latest_departure_time: rule.latest_departure_time || null, earliest_start_time: rule.earliest_start_time || null, weekday: rule.weekday ?? null, limit_value: rule.limit_value ?? null })));
+      if (error) { setStatus(error.message); return; }
+    }
+    setStatus('Assignment rules saved');
+    await loadInvigilators();
   }
 
   async function addInvigilator() {
@@ -170,6 +206,7 @@ export default function ManageInvigilatorsPage() {
                 <th style={th}>Email</th>
                 <th style={th}>Login setup</th>
                 <th style={th}>Status</th>
+                <th style={th}>Assignment rules</th>
                 <th style={th}>Actions</th>
               </tr>
             </thead>
@@ -190,6 +227,21 @@ export default function ManageInvigilatorsPage() {
                       }
                       style={tableInput}
                     />
+                  </td>
+                  <td style={td}>
+                    <div style={{ fontSize: 12, display: 'grid', gap: 6 }}>
+                      {(rules[inv.id] ?? []).map((rule, index) => <div key={index} style={{ display: 'grid', gap: 4, padding: 6, border: '1px solid #e5e7eb', borderRadius: 6 }}>
+                        <select value={rule.rule_type} onChange={e => updateRule(inv.id, index, { rule_type: e.target.value as AssignmentRule['rule_type'] })} style={tableInput}>
+                          <option value="latest_finish">Latest finish time</option><option value="earliest_start">Earliest start time</option><option value="no_weekday">Cannot work on day</option><option value="max_daily">Maximum shifts per day</option><option value="max_weekly">Maximum shifts per week</option>
+                        </select>
+                        {(rule.rule_type === 'latest_finish' || rule.rule_type === 'earliest_start') && <><select value={rule.session_key} onChange={e => updateRule(inv.id, index, { session_key: e.target.value })} style={tableInput}><option value="morning">Morning</option><option value="mid">Mid</option><option value="afternoon">Afternoon</option></select><input type="time" value={rule.rule_type === 'latest_finish' ? rule.latest_departure_time ?? '' : rule.earliest_start_time ?? ''} onChange={e => updateRule(inv.id, index, rule.rule_type === 'latest_finish' ? { latest_departure_time: e.target.value } : { earliest_start_time: e.target.value })} style={tableInput} /></>}
+                        {rule.rule_type === 'no_weekday' && <select value={rule.weekday ?? ''} onChange={e => updateRule(inv.id, index, { weekday: Number(e.target.value) })} style={tableInput}><option value="">Choose day</option><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option></select>}
+                        {(rule.rule_type === 'max_daily' || rule.rule_type === 'max_weekly') && <input type="number" min="1" value={rule.limit_value ?? ''} onChange={e => updateRule(inv.id, index, { limit_value: Number(e.target.value) })} placeholder="Number of shifts" style={tableInput} />}
+                        <button type="button" onClick={() => removeRule(inv.id, index)} style={dangerButton}>Remove rule</button>
+                      </div>)}
+                      <button type="button" onClick={() => addRule(inv.id)} style={secondaryButton}>+ Add rule</button>
+                      <button type="button" onClick={() => saveRules(inv.id)} style={primaryButton}>Save rules</button>
+                    </div>
                   </td>
 
                   <td style={td}>

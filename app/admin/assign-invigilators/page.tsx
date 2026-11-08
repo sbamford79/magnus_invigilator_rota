@@ -28,6 +28,7 @@ type Applicant = {
   invigilator_id: string;
   name: string;
 };
+type AssignmentRule = { rule_type: string; session_key: string; latest_departure_time: string | null; earliest_start_time: string | null; weekday: number | null; limit_value: number | null };
 
 type PendingRemoval = { shiftId: string; invigilatorId: string; updatedSelection: string[] };
 
@@ -69,6 +70,7 @@ export default function AssignInvigilatorsPage() {
 
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [allInvigilators, setAllInvigilators] = useState<Invigilator[]>([]);
+  const [assignmentRules, setAssignmentRules] = useState<Record<string, AssignmentRule[]>>({});
   const [applicants, setApplicants] = useState<Record<string, Applicant[]>>({});
   const [selected, setSelected] = useState<Record<string, string[]>>({});
   const [assigned, setAssigned] = useState<Record<string, string[]>>({});
@@ -112,6 +114,13 @@ export default function AssignInvigilatorsPage() {
     }
 
     setAllInvigilators((invigilatorRows ?? []) as Invigilator[]);
+    const { data: ruleRows } = await supabase
+      .from('invigilator_assignment_rules')
+      .select('invigilator_id, rule_type, session_key, latest_departure_time, earliest_start_time, weekday, limit_value')
+      .eq('active', true);
+    const groupedRules: Record<string, AssignmentRule[]> = {};
+    (ruleRows ?? []).forEach((row: any) => (groupedRules[row.invigilator_id] ??= []).push({ ...row, latest_departure_time: row.latest_departure_time?.slice(0, 5) ?? null, earliest_start_time: row.earliest_start_time?.slice(0, 5) ?? null }));
+    setAssignmentRules(groupedRules);
 
     const { data: slots, error: slotsError } = await supabase
       .from('shift_slots')
@@ -406,6 +415,7 @@ export default function AssignInvigilatorsPage() {
       setStatus('This invigilator is already assigned to an overlapping shift.');
       return;
     }
+    if (!exists && shift && ruleBlocksShift(shift, invigilatorId)) { setStatus('This invigilator is blocked by an assignment rule.'); return; }
 
     const updated = exists
       ? current.filter(id => id !== invigilatorId)
@@ -451,6 +461,7 @@ export default function AssignInvigilatorsPage() {
       setStatus('This invigilator is already assigned to an overlapping shift.');
       return;
     }
+    if (shift && ruleBlocksShift(shift, invigilatorId)) { setStatus('This invigilator is blocked by an assignment rule.'); return; }
 
     const updated = [...current, invigilatorId];
 
@@ -619,6 +630,18 @@ export default function AssignInvigilatorsPage() {
             (selected[otherShift.id] ?? []).includes(invigilatorId)
         )
     );
+  }
+
+  function ruleBlocksShift(shift: Shift, invigilatorId: string) {
+    return (assignmentRules[invigilatorId] ?? []).some(rule => {
+      if (rule.rule_type === 'latest_finish') return rule.session_key === shift.session && !!rule.latest_departure_time && !!shift.endTime && shift.endTime > rule.latest_departure_time;
+      if (rule.rule_type === 'earliest_start') return rule.session_key === shift.session && !!rule.earliest_start_time && !!shift.startTime && shift.startTime < rule.earliest_start_time;
+      if (rule.rule_type === 'no_weekday' && rule.weekday !== null) return new Date(`${shift.date}T12:00:00`).getDay() === rule.weekday;
+      const assignedForPerson = shifts.filter(other => (selected[other.id] ?? []).includes(invigilatorId));
+      if (rule.rule_type === 'max_daily') return assignedForPerson.filter(other => other.date === shift.date).length >= (rule.limit_value ?? Infinity);
+      if (rule.rule_type === 'max_weekly') { const start = new Date(`${shift.date}T12:00:00`); start.setDate(start.getDate() - ((start.getDay() + 6) % 7)); const end = new Date(start); end.setDate(end.getDate()+7); return assignedForPerson.filter(other => { const date = new Date(`${other.date}T12:00:00`); return date >= start && date < end; }).length >= (rule.limit_value ?? Infinity); }
+      return false;
+    });
   }
 
   function getInvigilatorName(invigilatorId: string) {
@@ -897,10 +920,11 @@ export default function AssignInvigilatorsPage() {
                             shift.id,
                             app.invigilator_id
                           );
+                        const hasRuleRestriction = !isChecked && ruleBlocksShift(shift, app.invigilator_id);
                         const isDisabled =
                           pendingSaves > 0 ||
                           (!isChecked &&
-                            (limitReached || hasOverlappingAssignment));
+                            (limitReached || hasOverlappingAssignment || hasRuleRestriction));
 
                         return (
                           <label
@@ -934,6 +958,7 @@ export default function AssignInvigilatorsPage() {
                                   Already assigned to an overlapping shift
                                 </small>
                               )}
+                              {hasRuleRestriction && <small style={{ display: 'block', color: '#6b7280', marginTop: 2 }}>Blocked by an assignment rule</small>}
                             </span>
                           </label>
                         );
@@ -1028,7 +1053,8 @@ export default function AssignInvigilatorsPage() {
                       .filter(
                         inv =>
                           !selectedIds.includes(inv.id) &&
-                          !isAssignedToOverlappingShift(shift.id, inv.id)
+                          !isAssignedToOverlappingShift(shift.id, inv.id) &&
+                          !ruleBlocksShift(shift, inv.id)
                       )
                       .map(inv => (
                         <option key={inv.id} value={inv.id}>
