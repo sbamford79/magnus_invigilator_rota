@@ -299,6 +299,13 @@ export default function AdminHomePage() {
         />
 
         <DashboardCard
+          href="/admin/running-orders"
+          icon="📄"
+          title="Running Orders"
+          text="Create editable Word running orders for every room in a season."
+        />
+
+        <DashboardCard
           href="/admin/invigilator-information"
           icon="ℹ️"
           title="Invigilator Information"
