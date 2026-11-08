@@ -9,6 +9,7 @@ import { formatLongDate } from '../../../lib/dateHelpers';
 type RoomExam = { id: string; exam_date: string; start_time: string | null; room_name: string | null; exam_name: string | null; paper_code: string | null; duration_minutes: number | null; session_key: string | null };
 type RunningOrder = { date: string; room: string; session: string; firstSession: RoomExam[]; secondSession: RoomExam[] };
 const border = { style: BorderStyle.SINGLE, size: 8, color: '000000' };
+const noBorder = { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' };
 
 function timeToMinutes(value: string | null) { const match = String(value ?? '').match(/(\d{1,2}):(\d{2})/); return match ? Number(match[1]) * 60 + Number(match[2]) : 0; }
 function formatTime(value: string | null) { const total = timeToMinutes(value); const hours = Math.floor(total / 60); return `${hours % 12 || 12}:${String(total % 60).padStart(2, '0')}${hours >= 12 ? 'pm' : 'am'}`; }
@@ -74,15 +75,29 @@ function sessionContent(title: string, exams: RoomExam[], second = false) {
   });
   return content;
 }
+function detailsTable(subjects: string, order: RunningOrder) {
+  const cell = (text: string, bold = false, after = 40) => new TableCell({ children: [new Paragraph({ spacing: { after }, children: [new TextRun({ text, bold, size: 20, font: 'Calibri' })] })], margins: { top: 30, bottom: 30, left: 0, right: 0 } });
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    borders: { top: noBorder, bottom: noBorder, left: noBorder, right: noBorder, insideHorizontal: noBorder, insideVertical: noBorder },
+    rows: [
+      new TableRow({ children: [cell('SUBJECTS:', true), cell(subjects)] }),
+      new TableRow({ children: [cell('DATE:', true), cell(formatLongDate(order.date))] }),
+      new TableRow({ children: [cell('SESSION:', true), cell(order.session)] }),
+      new TableRow({ children: [cell('Papers Checked By:', true, 280), cell('1  _______________________', false, 280)] }),
+      new TableRow({ children: [cell(''), cell('2  _______________________')] }),
+    ],
+  });
+}
 function documentForOrders(orders: RunningOrder[]) {
   return new Document({ sections: orders.map(order => {
     const subjects = Array.from(new Set([...order.firstSession, ...order.secondSession].map(exam => subjectName(exam.exam_name)).filter(Boolean))).join(', ');
     return { properties: { page: { margin: { top: 550, bottom: 550, left: 1800, right: 1800 } } }, children: [
-      paragraph(`EXAM RUNNING ORDER - ${order.room}`, { bold: true, align: AlignmentType.CENTER, size: 28 }), paragraph(`SUBJECTS:     ${subjects}`, { bold: true }), paragraph(`DATE:          ${formatLongDate(order.date)}`, { bold: true }), paragraph(`SESSION:     ${order.session}`, { bold: true }), paragraph('Papers Checked By     1 _______________________', { size: 20 }), paragraph('                              2 _______________________', { size: 20 }),
+      paragraph(`EXAM RUNNING ORDER - ${order.room}`, { bold: true, align: AlignmentType.CENTER, size: 28 }), detailsTable(subjects, order),
       new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: { top: border, bottom: border, left: border, right: border, insideHorizontal: border, insideVertical: border }, rows: [
         new TableRow({ children: [new TableCell({ children: sessionContent('SESSION 1', order.firstSession), margins: { top: 160, bottom: 160, left: 160, right: 160 } })] }),
         ...(order.secondSession.length ? [new TableRow({ children: [new TableCell({ children: [paragraph('SHORT BREAK - IN SILENCE', { bold: true, align: AlignmentType.CENTER, size: 20 })], shading: { type: ShadingType.CLEAR, color: 'auto', fill: 'E7E6E6' }, margins: { top: 120, bottom: 120, left: 160, right: 160 } })] }), new TableRow({ children: [new TableCell({ children: sessionContent('SESSION 2', order.secondSession, true), margins: { top: 160, bottom: 160, left: 160, right: 160 } })] })] : []),
-      ] }), paragraph('At the break, the students must remain silent as other exams may still be continuing.', { bold: true, size: 19 }), paragraph('Students must not leave unless absolutely necessary and must be fully supervised if they do leave the examination room.', { bold: true, size: 19 }),
+      ] }), new Paragraph({ spacing: { after: 180 } }), paragraph('At the break, the students must remain silent as other exams may still be continuing.', { bold: true, size: 19 }), paragraph('Students must not leave unless absolutely necessary and must be fully supervised if they do leave the examination room.', { bold: true, size: 19 }),
     ] };
   }) });
 }
