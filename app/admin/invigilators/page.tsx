@@ -25,6 +25,7 @@ export default function ManageInvigilatorsPage() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [status, setStatus] = useState('');
+  const [inactiveView, setInactiveView] = useState<'hide' | 'show'>('hide');
   const [rules, setRules] = useState<Record<string, AssignmentRule[]>>({});
 
   useEffect(() => {
@@ -150,6 +151,12 @@ export default function ManageInvigilatorsPage() {
   const pendingCount = invigilators.filter(
     inv => inv.active && !inv.auth_user_id
   ).length;
+  const visibleInvigilators = invigilators
+    .filter(inv => inactiveView === 'show' || inv.active)
+    .sort((a, b) => {
+      if (a.active !== b.active) return a.active ? -1 : 1;
+      return a.full_name.localeCompare(b.full_name);
+    });
 
   return (
     <div style={{ padding: 24, maxWidth: 1150, margin: '0 auto' }}>
@@ -196,7 +203,16 @@ export default function ManageInvigilatorsPage() {
       </div>
 
       <div style={card}>
-        <h2 style={sectionTitle}>Invigilators</h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <h2 style={sectionTitle}>Invigilators</h2>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontWeight: 700 }}>
+            Deactivated accounts
+            <select value={inactiveView} onChange={e => setInactiveView(e.target.value as 'hide' | 'show')} style={tableInput}>
+              <option value="hide">Hide</option>
+              <option value="show">Show at bottom</option>
+            </select>
+          </label>
+        </div>
 
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -212,7 +228,7 @@ export default function ManageInvigilatorsPage() {
             </thead>
 
             <tbody>
-              {invigilators.map(inv => (
+              {visibleInvigilators.map(inv => (
                 <tr
                   key={inv.id}
                   style={{
@@ -290,7 +306,7 @@ export default function ManageInvigilatorsPage() {
                 </tr>
               ))}
 
-              {invigilators.length === 0 && (
+              {visibleInvigilators.length === 0 && (
                 <tr>
                   <td style={td} colSpan={5}>
                     No invigilators added yet.
