@@ -12,7 +12,7 @@ type Invigilator = {
 };
 
 type AssignmentRule = {
-  rule_type: 'latest_finish' | 'earliest_start' | 'no_weekday' | 'max_daily' | 'max_weekly';
+  rule_type: 'latest_finish' | 'earliest_start' | 'no_weekday' | 'max_daily' | 'max_weekly' | 'work_all_day';
   session_key: string;
   latest_departure_time: string | null;
   earliest_start_time: string | null;
@@ -248,7 +248,7 @@ export default function ManageInvigilatorsPage() {
                     <div style={{ fontSize: 12, display: 'grid', gap: 6 }}>
                       {(rules[inv.id] ?? []).map((rule, index) => <div key={index} style={{ display: 'grid', gap: 4, padding: 6, border: '1px solid #e5e7eb', borderRadius: 6 }}>
                         <select value={rule.rule_type} onChange={e => updateRule(inv.id, index, { rule_type: e.target.value as AssignmentRule['rule_type'] })} style={tableInput}>
-                          <option value="latest_finish">Latest finish time</option><option value="earliest_start">Earliest start time</option><option value="no_weekday">Cannot work on day</option><option value="max_daily">Maximum shifts per day</option><option value="max_weekly">Maximum shifts per week</option>
+                          <option value="latest_finish">Latest finish time</option><option value="earliest_start">Earliest start time</option><option value="no_weekday">Cannot work on day</option><option value="max_daily">Maximum shifts per day</option><option value="max_weekly">Maximum shifts per week</option><option value="work_all_day">Work all day when available</option>
                         </select>
                         {(rule.rule_type === 'latest_finish' || rule.rule_type === 'earliest_start') && <><select value={rule.session_key} onChange={e => updateRule(inv.id, index, { session_key: e.target.value })} style={tableInput}><option value="morning">Morning</option><option value="mid">Mid</option><option value="afternoon">Afternoon</option></select><input type="time" value={rule.rule_type === 'latest_finish' ? rule.latest_departure_time ?? '' : rule.earliest_start_time ?? ''} onChange={e => updateRule(inv.id, index, rule.rule_type === 'latest_finish' ? { latest_departure_time: e.target.value } : { earliest_start_time: e.target.value })} style={tableInput} /></>}
                         {rule.rule_type === 'no_weekday' && <select value={rule.weekday ?? ''} onChange={e => updateRule(inv.id, index, { weekday: Number(e.target.value) })} style={tableInput}><option value="">Choose day</option><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option></select>}

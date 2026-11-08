@@ -425,6 +425,29 @@ export default function AssignInvigilatorsPage() {
       setPendingRemoval({ shiftId, invigilatorId, updatedSelection: updated });
       return;
     }
+    if (shift && hasWorkAllDayRule(invigilatorId)) {
+      const planned: Record<string, string[]> = { ...selected, [shiftId]: updated };
+      const addedShiftIds = [shiftId];
+      const otherAppliedShifts = shifts
+        .filter(other => other.id !== shiftId && other.date === shift.date && isApplicant(other.id, invigilatorId))
+        .sort((a, b) => (a.startTime ?? '').localeCompare(b.startTime ?? ''));
+
+      for (const otherShift of otherAppliedShifts) {
+        const alreadyAssigned = (planned[otherShift.id] ?? []).includes(invigilatorId);
+        const shiftIsFull = (planned[otherShift.id] ?? []).length >= otherShift.needed;
+        if (alreadyAssigned || shiftIsFull || ruleBlocksShift(otherShift, invigilatorId)) continue;
+        if (isAssignedToOverlappingPlannedShift(otherShift, invigilatorId, planned)) continue;
+        planned[otherShift.id] = [...(planned[otherShift.id] ?? []), invigilatorId];
+        addedShiftIds.push(otherShift.id);
+      }
+
+      setSelected(planned);
+      for (const id of addedShiftIds) await saveAssignmentsForShift(id, planned[id]);
+      const extraCount = addedShiftIds.length - 1;
+      setStatus(extraCount ? `Assignments auto-saved. Work all day also selected ${extraCount} other shift${extraCount === 1 ? '' : 's'}.` : 'Assignments auto-saved. No other suitable applied-for shifts that day.');
+      return;
+    }
+
     setSelected(prev => ({ ...prev, [shiftId]: updated }));
     await saveAssignmentsForShift(shiftId, updated);
   }
@@ -630,6 +653,26 @@ export default function AssignInvigilatorsPage() {
             (selected[otherShift.id] ?? []).includes(invigilatorId)
         )
     );
+  }
+
+  function isAssignedToOverlappingPlannedShift(
+    shift: Shift,
+    invigilatorId: string,
+    planned: Record<string, string[]>
+  ) {
+    return Boolean(
+      shift.startTime && shift.endTime && shifts.some(otherShift =>
+        otherShift.id !== shift.id &&
+        otherShift.date === shift.date &&
+        otherShift.startTime && otherShift.endTime &&
+        timeRangesOverlap(shift.startTime!, shift.endTime!, otherShift.startTime, otherShift.endTime) &&
+        (planned[otherShift.id] ?? []).includes(invigilatorId)
+      )
+    );
+  }
+
+  function hasWorkAllDayRule(invigilatorId: string) {
+    return (assignmentRules[invigilatorId] ?? []).some(rule => rule.rule_type === 'work_all_day');
   }
 
   function ruleBlocksShift(shift: Shift, invigilatorId: string) {
