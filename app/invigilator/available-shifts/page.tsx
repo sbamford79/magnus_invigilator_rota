@@ -186,7 +186,8 @@ export default function AvailableShiftsPage() {
       .from('published_shift_team')
       .select('shift_slot_id, invigilator_id')
       .in('shift_slot_id', slotIds)
-      .eq('published', true);
+      .eq('published', true)
+      .eq('is_shadowing', false);
 
     if (assignmentError) {
       setStatus(`Could not load assignments: ${assignmentError.message}`);
@@ -294,7 +295,8 @@ export default function AvailableShiftsPage() {
       const { count: assignedCount, error: assignedCountError } = await supabase
         .from('published_shift_team')
         .select('id', { count: 'exact', head: true })
-        .eq('shift_slot_id', shift.shiftSlotId);
+        .eq('shift_slot_id', shift.shiftSlotId)
+        .eq('is_shadowing', false);
 
       if (assignedCountError) {
         setStatus(`Could not check remaining spaces: ${assignedCountError.message}`);

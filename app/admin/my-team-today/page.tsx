@@ -112,7 +112,8 @@ export default function AdminMyTeamTodayPage() {
       .from('shift_assignments')
       .select('shift_slot_id')
       .in('shift_slot_id', slotIds)
-      .eq('published', true);
+      .eq('published', true)
+      .eq('is_shadowing', false);
 
     const assignedCountBySlot: Record<string, number> = {};
 

@@ -73,10 +73,12 @@ export default function AssignInvigilatorsPage() {
   const [assignmentRules, setAssignmentRules] = useState<Record<string, AssignmentRule[]>>({});
   const [applicants, setApplicants] = useState<Record<string, Applicant[]>>({});
   const [selected, setSelected] = useState<Record<string, string[]>>({});
+  const [shadowing, setShadowing] = useState<Record<string, string[]>>({});
   const [assigned, setAssigned] = useState<Record<string, string[]>>({});
   const [publishedAssignments, setPublishedAssignments] = useState<Record<string, string[]>>({});
   const [pendingRemoval, setPendingRemoval] = useState<PendingRemoval | null>(null);
   const [manualPick, setManualPick] = useState<Record<string, string>>({});
+  const [shadowPick, setShadowPick] = useState<Record<string, string>>({});
   const [status, setStatus] = useState('');
   const [lastPublishedAt, setLastPublishedAt] = useState<string | null>(null);
   const [pendingSaves, setPendingSaves] = useState(0);
@@ -173,6 +175,7 @@ export default function AssignInvigilatorsPage() {
       setApplicants({});
       setAssigned({});
       setSelected({});
+      setShadowing({});
       return;
     }
 
@@ -211,7 +214,7 @@ export default function AssignInvigilatorsPage() {
 
     const { data: assignmentRows, error: assignmentsError } = await supabase
       .from('shift_assignments')
-      .select('shift_slot_id, invigilator_id, published')
+      .select('shift_slot_id, invigilator_id, published, is_shadowing')
       .in('shift_slot_id', shiftSlotIds);
 
     if (assignmentsError) {
@@ -220,25 +223,28 @@ export default function AssignInvigilatorsPage() {
     }
 
     const assignedMap: Record<string, string[]> = {};
+    const shadowingMap: Record<string, string[]> = {};
     const publishedMap: Record<string, string[]> = {};
 
     (assignmentRows ?? []).forEach((row: any) => {
-      if (!assignedMap[row.shift_slot_id]) {
-        assignedMap[row.shift_slot_id] = [];
+      const target = row.is_shadowing ? shadowingMap : assignedMap;
+      if (!target[row.shift_slot_id]) {
+        target[row.shift_slot_id] = [];
       }
-
-      assignedMap[row.shift_slot_id].push(row.invigilator_id);
-      if (row.published) (publishedMap[row.shift_slot_id] ??= []).push(row.invigilator_id);
+      target[row.shift_slot_id].push(row.invigilator_id);
+      if (!row.is_shadowing && row.published) (publishedMap[row.shift_slot_id] ??= []).push(row.invigilator_id);
     });
 
     setAssigned(assignedMap);
     setPublishedAssignments(publishedMap);
     setSelected(assignedMap);
+    setShadowing(shadowingMap);
   }
 
   async function saveAssignmentsForShift(
     shiftId: string,
     invigilatorIds: string[],
+    shadowingIds = shadowing[shiftId] ?? [],
     removeAvailabilityFor?: string
   ) {
     saveInProgressRef.current = true;
@@ -247,7 +253,7 @@ export default function AssignInvigilatorsPage() {
     try {
       const { data: existingRows, error: existingError } = await supabase
         .from('shift_assignments')
-        .select('id, invigilator_id')
+        .select('id, invigilator_id, is_shadowing')
         .eq('shift_slot_id', shiftId);
 
       if (existingError) {
@@ -256,16 +262,17 @@ export default function AssignInvigilatorsPage() {
         return;
       }
 
-      const wantedIds = new Set(invigilatorIds);
-      const existingInvigilatorIds = new Set(
-        (existingRows ?? []).map(row => row.invigilator_id)
-      );
+      const wantedAssignments = new Map<string, boolean>([
+        ...invigilatorIds.map(id => [id, false] as [string, boolean]),
+        ...shadowingIds.map(id => [id, true] as [string, boolean]),
+      ]);
+      const existingInvigilatorIds = new Set((existingRows ?? []).map(row => row.invigilator_id));
       const assignmentIdsToRemove = (existingRows ?? [])
-        .filter(row => !wantedIds.has(row.invigilator_id))
+        .filter(row => wantedAssignments.get(row.invigilator_id) !== Boolean(row.is_shadowing))
         .map(row => row.id);
-      const invigilatorIdsToAdd = invigilatorIds.filter(
-        id => !existingInvigilatorIds.has(id)
-      );
+      const invigilatorIdsToAdd = Array.from(wantedAssignments.entries())
+        .filter(([id, isShadowing]) => !existingInvigilatorIds.has(id) || (existingRows ?? []).some(row => row.invigilator_id === id && Boolean(row.is_shadowing) !== isShadowing))
+        .map(([id, isShadowing]) => ({ id, isShadowing }));
 
       if (assignmentIdsToRemove.length > 0) {
         const { error: deleteError } = await supabase
@@ -290,10 +297,11 @@ export default function AssignInvigilatorsPage() {
         const { error: insertError } = await supabase
           .from('shift_assignments')
           .insert(
-            invigilatorIdsToAdd.map(id => ({
+            invigilatorIdsToAdd.map(({ id, isShadowing }) => ({
               shift_slot_id: shiftId,
               invigilator_id: id,
               published: false,
+              is_shadowing: isShadowing,
             }))
           );
 
@@ -324,7 +332,7 @@ export default function AssignInvigilatorsPage() {
                   )
                 )
               `)
-              .in('invigilator_id', invigilatorIdsToAdd)
+              .in('invigilator_id', invigilatorIdsToAdd.map(item => item.id))
               .neq('shift_slot_id', shiftId);
 
           if (applicationError) {
@@ -501,6 +509,36 @@ export default function AssignInvigilatorsPage() {
     await saveAssignmentsForShift(shiftId, updated);
   }
 
+  async function addShadowingInvigilator(shiftId: string) {
+    if (saveInProgressRef.current) {
+      setStatus('Please wait for the current assignment change to finish saving.');
+      return;
+    }
+    const invigilatorId = shadowPick[shiftId];
+    const shift = shifts.find(item => item.id === shiftId);
+    if (!invigilatorId) { setStatus('Please choose an invigilator to shadow.'); return; }
+    if (!shift) return;
+    if ((selected[shiftId] ?? []).includes(invigilatorId) || (shadowing[shiftId] ?? []).includes(invigilatorId)) {
+      setStatus('That invigilator is already on this shift.');
+      return;
+    }
+    if (isAssignedToOverlappingShift(shiftId, invigilatorId) || ruleBlocksShift(shift, invigilatorId)) {
+      setStatus('This invigilator cannot be added to this shadowing shift.');
+      return;
+    }
+    const updatedShadowing = [...(shadowing[shiftId] ?? []), invigilatorId];
+    setShadowing(prev => ({ ...prev, [shiftId]: updatedShadowing }));
+    setShadowPick(prev => ({ ...prev, [shiftId]: '' }));
+    await saveAssignmentsForShift(shiftId, selected[shiftId] ?? [], updatedShadowing);
+  }
+
+  async function removeShadowingInvigilator(shiftId: string, invigilatorId: string) {
+    if (saveInProgressRef.current) return;
+    const updatedShadowing = (shadowing[shiftId] ?? []).filter(id => id !== invigilatorId);
+    setShadowing(prev => ({ ...prev, [shiftId]: updatedShadowing }));
+    await saveAssignmentsForShift(shiftId, selected[shiftId] ?? [], updatedShadowing);
+  }
+
   async function removeManualInvigilator(
     shiftId: string,
     invigilatorId: string
@@ -521,7 +559,7 @@ export default function AssignInvigilatorsPage() {
     const { shiftId, invigilatorId, updatedSelection } = pendingRemoval;
     setPendingRemoval(null);
     setSelected(prev => ({ ...prev, [shiftId]: updatedSelection }));
-    await saveAssignmentsForShift(shiftId, updatedSelection, removeAvailability ? invigilatorId : undefined);
+    await saveAssignmentsForShift(shiftId, updatedSelection, shadowing[shiftId] ?? [], removeAvailability ? invigilatorId : undefined);
   }
 
   async function publishAll() {
@@ -650,7 +688,8 @@ export default function AssignInvigilatorsPage() {
               otherShift.startTime,
               otherShift.endTime
             ) &&
-            (selected[otherShift.id] ?? []).includes(invigilatorId)
+            ((selected[otherShift.id] ?? []).includes(invigilatorId) ||
+              (shadowing[otherShift.id] ?? []).includes(invigilatorId))
         )
     );
   }
@@ -666,7 +705,8 @@ export default function AssignInvigilatorsPage() {
         otherShift.date === shift.date &&
         otherShift.startTime && otherShift.endTime &&
         timeRangesOverlap(shift.startTime!, shift.endTime!, otherShift.startTime, otherShift.endTime) &&
-        (planned[otherShift.id] ?? []).includes(invigilatorId)
+        ((planned[otherShift.id] ?? []).includes(invigilatorId) ||
+          (shadowing[otherShift.id] ?? []).includes(invigilatorId))
       )
     );
   }
@@ -871,6 +911,7 @@ export default function AssignInvigilatorsPage() {
         <div style={{ display: 'grid', gap: 18 }}>
           {sortedShifts.map(shift => {
             const selectedIds = selected[shift.id] ?? [];
+            const shadowingIds = shadowing[shift.id] ?? [];
             const limitReached = selectedIds.length >= shift.needed;
             const assignedCount = assigned[shift.id]?.length ?? 0;
             const remaining = Math.max(shift.needed - assignedCount, 0);
@@ -901,6 +942,7 @@ export default function AssignInvigilatorsPage() {
                     : ''}{' '}
                   (
                   {assignedCount}/{shift.needed} assigned)
+                  {shadowingIds.length > 0 ? ` + ${shadowingIds.length} shadowing` : ''}
                 </h3>
 
                 <div
@@ -957,6 +999,7 @@ export default function AssignInvigilatorsPage() {
                         const isChecked = selectedIds.includes(
                           app.invigilator_id
                         );
+                        const isShadowing = shadowingIds.includes(app.invigilator_id);
                         const hasOverlappingAssignment =
                           !isChecked &&
                           isAssignedToOverlappingShift(
@@ -964,10 +1007,7 @@ export default function AssignInvigilatorsPage() {
                             app.invigilator_id
                           );
                         const hasRuleRestriction = !isChecked && ruleBlocksShift(shift, app.invigilator_id);
-                        const isDisabled =
-                          pendingSaves > 0 ||
-                          (!isChecked &&
-                            (limitReached || hasOverlappingAssignment || hasRuleRestriction));
+                        const isDisabled = pendingSaves > 0 || (!isChecked && (isShadowing || limitReached || hasOverlappingAssignment || hasRuleRestriction));
 
                         return (
                           <label
@@ -1002,6 +1042,7 @@ export default function AssignInvigilatorsPage() {
                                 </small>
                               )}
                               {hasRuleRestriction && <small style={{ display: 'block', color: '#6b7280', marginTop: 2 }}>Blocked by an assignment rule</small>}
+                              {isShadowing && <small style={{ display: 'block', color: '#2563eb', marginTop: 2 }}>Added as shadowing</small>}
                             </span>
                           </label>
                         );
@@ -1063,6 +1104,19 @@ export default function AssignInvigilatorsPage() {
                   </div>
                 )}
 
+                {shadowingIds.length > 0 && (
+                  <div style={{ marginBottom: 16, padding: 12, background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 12 }}>
+                    <strong style={{ color: '#1d4ed8' }}>Shadowing</strong>
+                    <p style={{ margin: '4px 0 8px', color: '#475569', fontSize: 13 }}>These invigilators are attending but do not count towards the staffing number.</p>
+                    <div style={{ display: 'grid', gap: 8 }}>
+                      {shadowingIds.map(id => <div key={id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, background: 'white', borderRadius: 10, padding: '8px 10px' }}>
+                        <span>{getInvigilatorName(id)}</span>
+                        <button onClick={() => removeShadowingInvigilator(shift.id, id)} disabled={pendingSaves > 0} style={{ background: '#fee2e2', color: '#991b1b', border: '1px solid #fecaca', borderRadius: 8, padding: '5px 8px', cursor: pendingSaves > 0 ? 'not-allowed' : 'pointer', fontWeight: 700, opacity: pendingSaves > 0 ? 0.6 : 1 }}>Remove</button>
+                      </div>)}
+                    </div>
+                  </div>
+                )}
+
                 <div
                   style={{
                     borderTop: '1px solid #f1f5f9',
@@ -1096,6 +1150,7 @@ export default function AssignInvigilatorsPage() {
                       .filter(
                         inv =>
                           !selectedIds.includes(inv.id) &&
+                          !shadowingIds.includes(inv.id) &&
                           !isAssignedToOverlappingShift(shift.id, inv.id) &&
                           !ruleBlocksShift(shift, inv.id)
                       )
@@ -1122,6 +1177,15 @@ export default function AssignInvigilatorsPage() {
                   >
                     Add
                   </button>
+
+                  <div style={{ width: '100%', borderTop: '1px solid #e0e7ff', paddingTop: 12, marginTop: 4, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <strong style={{ color: '#1d4ed8' }}>Add invigilator to shadowing shift:</strong>
+                    <select value={shadowPick[shift.id] ?? ''} disabled={pendingSaves > 0} onChange={e => setShadowPick(prev => ({ ...prev, [shift.id]: e.target.value }))} style={{ padding: 8, borderRadius: 8, border: '1px solid #93c5fd', minWidth: 220 }}>
+                      <option value="">Choose invigilator...</option>
+                      {allInvigilators.filter(inv => !selectedIds.includes(inv.id) && !shadowingIds.includes(inv.id) && !isAssignedToOverlappingShift(shift.id, inv.id) && !ruleBlocksShift(shift, inv.id)).map(inv => <option key={inv.id} value={inv.id}>{inv.full_name}</option>)}
+                    </select>
+                    <button onClick={() => addShadowingInvigilator(shift.id)} disabled={pendingSaves > 0} style={{ background: '#2563eb', color: 'white', border: 'none', padding: '9px 12px', borderRadius: 8, cursor: pendingSaves > 0 ? 'not-allowed' : 'pointer', fontWeight: 700, opacity: pendingSaves > 0 ? 0.6 : 1 }}>Add shadowing</button>
+                  </div>
                 </div>
               </div>
             );
